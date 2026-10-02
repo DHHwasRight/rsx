@@ -717,7 +717,7 @@ impl<'a> Parser<'a> {
         if raw {
             self.sc.bump();
         }
-        let source = self.read_rust(Stop::CloseBrace).trim().to_string();
+        let source = self.read_fragment(Stop::CloseBrace);
         if self.sc.peek() != Some(b'}') {
             return self.err(
                 "unterminated `{` expression",
@@ -1030,7 +1030,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn read_attr_expr(&mut self, name: &str, from: Pos) -> Result<String> {
+    fn read_attr_expr(&mut self, name: &str, from: Pos) -> Result<Rust> {
         if self.sc.peek() != Some(b'{') {
             return self.err(
                 format!("expected `{{` after `{name}=`"),
@@ -1038,7 +1038,7 @@ impl<'a> Parser<'a> {
             );
         }
         self.sc.bump();
-        let expr = self.read_rust(Stop::CloseBrace).trim().to_string();
+        let expr = self.read_fragment(Stop::CloseBrace);
         if self.sc.peek() != Some(b'}') {
             return self.err(
                 format!("unterminated expression for attribute `{name}`"),
@@ -1066,7 +1066,7 @@ impl<'a> Parser<'a> {
             )
             .with_help("spread a collection of attributes with `{ ...attrs }`"));
         }
-        let expr = self.read_rust(Stop::CloseBrace).trim().to_string();
+        let expr = self.read_fragment(Stop::CloseBrace);
         if self.sc.peek() != Some(b'}') {
             return self.err(
                 "unterminated spread attribute",
@@ -1161,7 +1161,7 @@ impl<'a> Parser<'a> {
     fn parse_if(&mut self) -> Result<Node> {
         let from = self.sc.pos();
         self.sc.eat_keyword("if");
-        let cond = self.read_rust(Stop::OpenBrace).trim().to_string();
+        let cond = self.read_fragment(Stop::OpenBrace);
         let then_body = self.parse_braced_body("if", from)?;
 
         let mut else_ifs = Vec::new();
@@ -1177,7 +1177,7 @@ impl<'a> Parser<'a> {
             self.sc.skip_trivia();
             if self.sc.eat_keyword("if") {
                 let branch_from = save;
-                let cond = self.read_rust(Stop::OpenBrace).trim().to_string();
+                let cond = self.read_fragment(Stop::OpenBrace);
                 let body = self.parse_braced_body("else if", branch_from)?;
                 else_ifs.push(ElseIf {
                     span: self.sc.span_from(branch_from),
@@ -1202,7 +1202,7 @@ impl<'a> Parser<'a> {
     fn parse_for(&mut self) -> Result<Node> {
         let from = self.sc.pos();
         self.sc.eat_keyword("for");
-        let header = self.read_rust(Stop::OpenBrace).trim().to_string();
+        let header = self.read_fragment(Stop::OpenBrace);
         let body = self.parse_braced_body("for", from)?;
         Ok(Node::For(For {
             span: self.sc.span_from(from),
@@ -1214,7 +1214,7 @@ impl<'a> Parser<'a> {
     fn parse_while(&mut self) -> Result<Node> {
         let from = self.sc.pos();
         self.sc.eat_keyword("while");
-        let header = self.read_rust(Stop::OpenBrace).trim().to_string();
+        let header = self.read_fragment(Stop::OpenBrace);
         let body = self.parse_braced_body("while", from)?;
         Ok(Node::While(While {
             span: self.sc.span_from(from),
@@ -1227,6 +1227,7 @@ impl<'a> Parser<'a> {
     fn parse_bare_block(&mut self, kw: &str) -> Result<Node> {
         let from = self.sc.pos();
         self.sc.eat_keyword(kw);
+        let keyword_end = self.sc.pos();
         let header = self.read_rust(Stop::OpenBrace).trim().to_string();
         if !header.is_empty() {
             return self.err(
@@ -1237,11 +1238,9 @@ impl<'a> Parser<'a> {
         let body = self.parse_braced_body(kw, from)?;
         Ok(Node::While(While {
             span: self.sc.span_from(from),
-            header: if kw == "loop" {
-                "loop".to_string()
-            } else {
-                "unsafe".to_string()
-            },
+            // There is no header in the source, so the span covers the
+            // keyword that stands in for one.
+            header: Rust::new(kw, Span::new(from, keyword_end)),
             body,
         }))
     }
@@ -1268,7 +1267,7 @@ impl<'a> Parser<'a> {
     fn parse_match(&mut self) -> Result<Node> {
         let from = self.sc.pos();
         self.sc.eat_keyword("match");
-        let subject = self.read_rust(Stop::OpenBrace).trim().to_string();
+        let subject = self.read_fragment(Stop::OpenBrace);
         if self.sc.peek() != Some(b'{') {
             return self.err(
                 "expected `{` to open the `match` body",
@@ -1289,7 +1288,7 @@ impl<'a> Parser<'a> {
             }
 
             let arm_from = self.sc.pos();
-            let pattern = self.read_rust(Stop::FatArrow).trim().to_string();
+            let pattern = self.read_fragment(Stop::FatArrow);
             if !self.sc.eat("=>") {
                 return self.err(
                     "expected `=>` after the match pattern",
@@ -1341,13 +1340,13 @@ impl<'a> Parser<'a> {
 
     fn parse_stmt(&mut self) -> Result<Node> {
         let from = self.sc.pos();
-        let start = self.sc.offset();
-        self.read_rust(Stop::CloseBrace);
-        // `read_rust` with CloseBrace stops at `;` too; consume it.
+        let mut source = self.read_fragment(Stop::CloseBrace);
+        // `read_fragment` stops at the `;` as well; the statement keeps it.
         if self.sc.peek() == Some(b';') {
             self.sc.bump();
+            source.text.push(';');
+            source.span.to = self.sc.pos();
         }
-        let source = self.sc.slice(start, self.sc.offset()).trim().to_string();
         Ok(Node::Stmt(Stmt {
             span: self.sc.span_from(from),
             source,
@@ -1356,9 +1355,17 @@ impl<'a> Parser<'a> {
 
     // ------------------------------------------------------- rust fragments
 
-    /// Reads Rust source up to `stop`, at nesting depth zero.
-    fn read_rust(&mut self, stop: Stop) -> String {
-        let start = self.sc.offset();
+    /// Reads a Rust fragment up to `stop`, keeping the span of the text
+    /// itself so the generator can map positions into it.
+    ///
+    /// Leading and trailing whitespace is excluded from both the text and the
+    /// span, so the span starts on the first character an author could put a
+    /// cursor on — which is what a position in an editor has to line up with.
+    fn read_fragment(&mut self, stop: Stop) -> Rust {
+        self.sc.skip_trivia();
+        let from = self.sc.pos();
+        let mut to = from;
+
         let mut paren = 0i32;
         let mut bracket = 0i32;
         let mut brace = 0i32;
@@ -1381,12 +1388,14 @@ impl<'a> Parser<'a> {
                 continue;
             }
             if self.sc.skip_literal() {
+                to = self.sc.pos();
                 continue;
             }
 
             // `->` and `=>` are not angle brackets.
             if (self.sc.starts_with("->") || self.sc.starts_with("=>")) && stop != Stop::FatArrow {
                 self.sc.advance(2);
+                to = self.sc.pos();
                 continue;
             }
 
@@ -1416,9 +1425,18 @@ impl<'a> Parser<'a> {
                 _ => {}
             }
             self.sc.bump();
+            if !b.is_ascii_whitespace() {
+                to = self.sc.pos();
+            }
         }
 
-        self.sc.slice(start, self.sc.offset()).to_string()
+        let text = self.sc.slice(from.offset, to.offset).to_string();
+        Rust::new(text, Span::new(from, to))
+    }
+
+    /// Reads Rust source up to `stop`, discarding where it came from.
+    fn read_rust(&mut self, stop: Stop) -> String {
+        self.read_fragment(stop).text
     }
 }
 

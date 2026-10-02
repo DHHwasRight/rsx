@@ -15,7 +15,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use crate::ast::*;
+use crate::ast::{self, *};
 use crate::error::{Error, Result};
 use crate::naming::{to_snake_case, SYNTH_LIFETIME_PREFIX};
 use crate::registry::{Registry, Scope};
@@ -130,11 +130,53 @@ struct Generator<'a, 'r> {
     position: Option<Pos>,
 }
 
+/// A piece of a generated line: literal text, or Rust copied from the
+/// template and therefore worth mapping.
+struct Part<'a> {
+    text: std::borrow::Cow<'a, str>,
+    source: Option<crate::span::Span>,
+}
+
+impl<'a> Part<'a> {
+    fn lit(text: &'a str) -> Self {
+        Part {
+            text: std::borrow::Cow::Borrowed(text),
+            source: None,
+        }
+    }
+
+    fn owned(text: String) -> Self {
+        Part {
+            text: std::borrow::Cow::Owned(text),
+            source: None,
+        }
+    }
+
+    /// A fragment copied straight from the template.
+    fn frag(rust: &'a ast::Rust) -> Self {
+        Part {
+            text: std::borrow::Cow::Borrowed(&rust.text),
+            source: Some(rust.span),
+        }
+    }
+
+    /// Owned text that nonetheless came from `span` in the template.
+    fn mapped(text: String, span: crate::span::Span) -> Self {
+        Part {
+            text: std::borrow::Cow::Owned(text),
+            source: Some(span),
+        }
+    }
+}
+
 /// A component parameter resolved for code generation.
 struct ResolvedParam {
     name: String,
     /// Whether the writer function binds this parameter `mut`.
     mutable: bool,
+    /// Where the type was written, so hovering it can reach `rust-analyzer`.
+    /// `None` for a children parameter, whose type is invented here.
+    ty_span: Option<crate::span::Span>,
     /// The type as it appears in the generated function.
     fn_ty: String,
     /// The type as it appears in the generated struct, with named lifetimes.
@@ -155,13 +197,36 @@ impl Generator<'_, '_> {
     }
 
     fn line(&mut self, s: &str) {
-        let mut buffer = String::with_capacity(s.len() + self.depth * 4 + 1);
+        self.line_parts(&[Part::lit(s)]);
+    }
+
+    /// Emits a line built from literal text and Rust fragments, recording
+    /// where each fragment landed.
+    ///
+    /// The mapping has to be byte-exact rather than line-level: answering
+    /// "what can follow this dot" means asking `rust-analyzer` about the same
+    /// character of the generated code, not the same line.
+    fn line_parts(&mut self, parts: &[Part<'_>]) {
+        let mut buffer = String::with_capacity(self.depth * 4 + 1);
         for _ in 0..self.depth {
             buffer.push_str("    ");
         }
-        buffer.push_str(s);
+
+        // Where this line will start once `emit` appends it.
+        let line_start = self.out.len();
+        let mut offsets = Vec::new();
+        for part in parts {
+            if let Some(span) = part.source {
+                offsets.push((line_start + buffer.len(), span, part.text.len()));
+            }
+            buffer.push_str(&part.text);
+        }
         buffer.push('\n');
+
         self.emit(&buffer);
+        for (generated, span, len) in offsets {
+            self.map.record_fragment(generated, span, len);
+        }
     }
 
     fn blank(&mut self) {
@@ -191,6 +256,11 @@ impl Generator<'_, '_> {
 
     fn open(&mut self, s: &str) {
         self.line(s);
+        self.depth += 1;
+    }
+
+    fn open_parts(&mut self, parts: &[Part<'_>]) {
+        self.line_parts(parts);
         self.depth += 1;
     }
 
@@ -270,19 +340,28 @@ impl Generator<'_, '_> {
 
         // ---- the writer function
         let fn_generics = generics.fn_decl();
-        let fn_params = params
-            .iter()
-            .map(|p| {
-                let binding = if p.mutable { "mut " } else { "" };
-                format!(", {binding}{}: {}", p.name, p.fn_ty)
-            })
-            .collect::<String>();
         let vis = vis_prefix(&c.vis);
         self.line("#[inline]");
-        self.open(&format!(
-            "{vis}fn {prim}{fn_generics}(__w: &mut {rt}::Writer<'_>{fn_params}) -> {rt}::Result{where_clause} {{",
-            rt = self.rt,
-        ));
+
+        // Built from parts so each parameter type keeps its link back to the
+        // template, which is what lets hovering a type reach `rust-analyzer`.
+        let mut signature = vec![Part::owned(format!(
+            "{vis}fn {prim}{fn_generics}(__w: &mut {rt}::Writer<'_>",
+            rt = self.rt
+        ))];
+        for param in &params {
+            let binding = if param.mutable { "mut " } else { "" };
+            signature.push(Part::owned(format!(", {binding}{}: ", param.name)));
+            match param.ty_span {
+                Some(span) => signature.push(Part::mapped(param.fn_ty.clone(), span)),
+                None => signature.push(Part::owned(param.fn_ty.clone())),
+            }
+        }
+        signature.push(Part::owned(format!(
+            ") -> {rt}::Result{where_clause} {{",
+            rt = self.rt
+        )));
+        self.open_parts(&signature);
         self.nodes(&c.body)?;
         self.flush_statics();
         self.line("Ok(())");
@@ -375,6 +454,7 @@ impl Generator<'_, '_> {
                 resolved.push(ResolvedParam {
                     name: param.name.clone(),
                     mutable: param.mutable,
+                    ty_span: None,
                     fn_ty: ty.clone(),
                     struct_ty: ty,
                     is_children: true,
@@ -386,6 +466,7 @@ impl Generator<'_, '_> {
             resolved.push(ResolvedParam {
                 name: param.name.clone(),
                 mutable: param.mutable,
+                ty_span: Some(param.ty_span),
                 fn_ty: param.ty.clone(),
                 struct_ty,
                 is_children: false,
@@ -428,27 +509,39 @@ impl Generator<'_, '_> {
             Node::Call(c) => self.call(c),
             Node::Expr(e) => {
                 self.flush_statics();
-                if self.children_params.contains(&e.source) {
+                if self.children_params.contains(&e.source.text) {
                     let rt = self.rt.clone();
-                    self.line(&format!("{rt}::Template::render({}, __w)?;", e.source));
+                    self.line_parts(&[
+                        Part::owned(format!("{rt}::Template::render(")),
+                        Part::frag(&e.source),
+                        Part::lit(", __w)?;"),
+                    ]);
                 } else {
                     // Borrowed, not moved: `{row.name}` must work when `name`
                     // is a `String` reached through a shared reference, and
                     // `&T` is `Display` whenever `T` is. The parentheses keep
                     // the borrow applying to the whole expression.
-                    self.line(&format!("__w.text(&({}))?;", e.source));
+                    self.line_parts(&[
+                        Part::lit("__w.text(&("),
+                        Part::frag(&e.source),
+                        Part::lit("))?;"),
+                    ]);
                 }
                 Ok(())
             }
             Node::RawExpr(e) => {
                 self.flush_statics();
-                self.line(&format!("__w.raw_text(&({}))?;", e.source));
+                self.line_parts(&[
+                    Part::lit("__w.raw_text(&("),
+                    Part::frag(&e.source),
+                    Part::lit("))?;"),
+                ]);
                 Ok(())
             }
             Node::If(n) => self.if_node(n),
             Node::For(n) => {
                 self.flush_statics();
-                self.open(&format!("for {} {{", n.header));
+                self.open_parts(&[Part::lit("for "), Part::frag(&n.header), Part::lit(" {")]);
                 self.nodes(&n.body)?;
                 self.flush_statics();
                 self.close("}");
@@ -456,12 +549,11 @@ impl Generator<'_, '_> {
             }
             Node::While(n) => {
                 self.flush_statics();
-                let header = if n.header == "loop" || n.header == "unsafe" {
-                    format!("{} {{", n.header)
+                if n.header == "loop" || n.header == "unsafe" {
+                    self.open(&format!("{} {{", n.header));
                 } else {
-                    format!("while {} {{", n.header)
-                };
-                self.open(&header);
+                    self.open_parts(&[Part::lit("while "), Part::frag(&n.header), Part::lit(" {")]);
+                }
                 self.nodes(&n.body)?;
                 self.flush_statics();
                 self.close("}");
@@ -469,9 +561,9 @@ impl Generator<'_, '_> {
             }
             Node::Match(n) => {
                 self.flush_statics();
-                self.open(&format!("match {} {{", n.subject));
+                self.open_parts(&[Part::lit("match "), Part::frag(&n.subject), Part::lit(" {")]);
                 for arm in &n.arms {
-                    self.open(&format!("{} => {{", arm.pattern));
+                    self.open_parts(&[Part::frag(&arm.pattern), Part::lit(" => {")]);
                     self.nodes(&arm.body)?;
                     self.flush_statics();
                     self.close("}");
@@ -481,7 +573,7 @@ impl Generator<'_, '_> {
             }
             Node::Stmt(s) => {
                 self.flush_statics();
-                self.line(&s.source);
+                self.line_parts(&[Part::frag(&s.source)]);
                 Ok(())
             }
         }
@@ -489,11 +581,16 @@ impl Generator<'_, '_> {
 
     fn if_node(&mut self, n: &If) -> Result<()> {
         self.flush_statics();
-        self.open(&format!("if {} {{", n.cond));
+        self.open_parts(&[Part::lit("if "), Part::frag(&n.cond), Part::lit(" {")]);
         self.nodes(&n.then_body)?;
         self.flush_statics();
         for branch in &n.else_ifs {
-            self.close(&format!("}} else if {} {{", branch.cond));
+            self.depth = self.depth.saturating_sub(1);
+            self.line_parts(&[
+                Part::lit("} else if "),
+                Part::frag(&branch.cond),
+                Part::lit(" {"),
+            ]);
             self.depth += 1;
             self.nodes(&branch.body)?;
             self.flush_statics();
@@ -525,17 +622,28 @@ impl Generator<'_, '_> {
                 Attribute::Expr { name, expr, .. } => {
                     self.push_static(&format!(" {name}=\""));
                     self.flush_statics();
-                    self.line(&format!("__w.attr(&({expr}))?;"));
+                    self.line_parts(&[
+                        Part::lit("__w.attr(&("),
+                        Part::frag(expr),
+                        Part::lit("))?;"),
+                    ]);
                     self.push_static("\"");
                 }
                 Attribute::Conditional { name, expr, .. } => {
                     self.flush_statics();
-                    let literal = rust_string_literal(name);
-                    self.line(&format!("__w.bool_attr({literal}, {expr})?;"));
+                    self.line_parts(&[
+                        Part::owned(format!("__w.bool_attr({}, ", rust_string_literal(name))),
+                        Part::frag(expr),
+                        Part::lit(")?;"),
+                    ]);
                 }
                 Attribute::Spread { expr, .. } => {
                     self.flush_statics();
-                    self.line(&format!("__w.spread({expr})?;"));
+                    self.line_parts(&[
+                        Part::lit("__w.spread("),
+                        Part::frag(expr),
+                        Part::lit(")?;"),
+                    ]);
                 }
             }
         }
@@ -569,8 +677,10 @@ impl Generator<'_, '_> {
         const CHILDREN_LOCAL: &str = "__rsx_children";
 
         let signature = self.scope.get(call.name());
-        let mut fields: Vec<String> = Vec::new();
-        let mut spread: Option<String> = None;
+        // Each field is its own run of parts so the expression inside keeps
+        // its link back to the template.
+        let mut fields: Vec<Vec<Part<'_>>> = Vec::new();
+        let mut spread: Option<&ast::Rust> = None;
         let mut provided: BTreeSet<String> = BTreeSet::new();
 
         for attr in &call.attrs {
@@ -582,7 +692,7 @@ impl Generator<'_, '_> {
                             attr.span(),
                         ));
                     }
-                    spread = Some(expr.clone());
+                    spread = Some(expr);
                 }
                 _ => {
                     let name = attr.name().unwrap_or_default();
@@ -610,14 +720,18 @@ impl Generator<'_, '_> {
                             attr.span(),
                         ));
                     }
-                    let value = match attr {
-                        Attribute::Static { value, .. } => rust_string_literal(value),
-                        Attribute::Expr { expr, .. } => expr.clone(),
-                        Attribute::Conditional { expr, .. } => expr.clone(),
-                        Attribute::Bare { .. } => "true".to_string(),
+                    let mut field = vec![Part::owned(format!("{name}: "))];
+                    match attr {
+                        Attribute::Static { value, .. } => {
+                            field.push(Part::owned(rust_string_literal(value)))
+                        }
+                        Attribute::Expr { expr, .. } | Attribute::Conditional { expr, .. } => {
+                            field.push(Part::frag(expr))
+                        }
+                        Attribute::Bare { .. } => field.push(Part::lit("true")),
                         Attribute::Spread { .. } => unreachable!(),
-                    };
-                    fields.push(format!("{name}: {value}"));
+                    }
+                    fields.push(field);
                 }
             }
         }
@@ -645,27 +759,41 @@ impl Generator<'_, '_> {
                 None => "children".to_string(),
             };
             provided.insert(field.clone());
-            fields.push(format!("{field}: {CHILDREN_LOCAL}"));
+            fields.push(vec![Part::owned(format!("{field}: {CHILDREN_LOCAL}"))]);
         } else if spread.is_none() {
             // A known component with an unfilled markup parameter renders
             // nothing there, which `()` expresses.
             if let Some(sig) = signature {
                 for name in sig.unfilled_children(&provided) {
-                    fields.push(format!("{name}: ()"));
+                    fields.push(vec![Part::owned(format!("{name}: ()"))]);
                 }
             }
         }
 
         if let Some(expr) = spread {
-            fields.push(format!("..{expr}"));
+            fields.push(vec![Part::lit(".."), Part::frag(expr)]);
         }
 
-        let literal = if fields.is_empty() {
-            format!("{} {{}}", call.path)
-        } else {
-            format!("{} {{ {} }}", call.path, fields.join(", "))
-        };
         let rt = self.rt.clone();
+        let mut line: Vec<Part<'_>> = Vec::new();
+        if fields.is_empty() {
+            line.push(Part::owned(format!(
+                "{rt}::Template::render({} {{}}, __w)?;",
+                call.path
+            )));
+        } else {
+            line.push(Part::owned(format!(
+                "{rt}::Template::render({} {{ ",
+                call.path
+            )));
+            for (index, field) in fields.into_iter().enumerate() {
+                if index > 0 {
+                    line.push(Part::lit(", "));
+                }
+                line.extend(field);
+            }
+            line.push(Part::lit(" }, __w)?;"));
+        }
 
         // The children closure becomes a local so the generated code stays
         // readable. The extra block scopes that local, so nesting a component
@@ -677,10 +805,10 @@ impl Generator<'_, '_> {
             self.flush_statics();
             self.line("Ok(())");
             self.close("});");
-            self.line(&format!("{rt}::Template::render({literal}, __w)?;"));
+            self.line_parts(&line);
             self.close("}");
         } else {
-            self.line(&format!("{rt}::Template::render({literal}, __w)?;"));
+            self.line_parts(&line);
         }
         Ok(())
     }

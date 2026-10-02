@@ -20,6 +20,7 @@
 //! assert!(doc.diagnostics.is_empty());
 //! ```
 
+pub mod bridge;
 pub mod completion;
 pub mod definition;
 pub mod document;
@@ -27,6 +28,8 @@ pub mod find_node;
 pub mod hover;
 pub mod html;
 pub mod protocol;
+pub mod rust;
+pub mod rust_analyzer;
 pub mod server;
 pub mod symbols;
 

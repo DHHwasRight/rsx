@@ -10,6 +10,7 @@ use std::io::{self, BufRead, Write};
 use serde_json::{json, Value};
 
 use crate::protocol::Position;
+use crate::rust::{RustBridge, Settings};
 use crate::{completion, definition, hover, symbols, DocumentStore};
 
 /// Runs the server on stdin and stdout until the client disconnects.
@@ -67,18 +68,41 @@ enum Outcome {
 
 struct Server {
     store: DocumentStore,
+    /// Answers the questions that are about Rust rather than about markup.
+    rust: RustBridge,
 }
 
 impl Server {
     fn new() -> Self {
         Server {
             store: DocumentStore::new(),
+            rust: RustBridge::new(Settings::default()),
         }
+    }
+
+    /// Reads the settings an editor passes in `initializationOptions`.
+    fn configure(&mut self, params: &Value) {
+        let mut settings = Settings::default();
+        if let Some(options) = params.get("initializationOptions") {
+            if let Some(analyzer) = options.get("rustAnalyzer") {
+                if let Some(enabled) = analyzer.get("enabled").and_then(Value::as_bool) {
+                    settings.enabled = enabled;
+                }
+                if let Some(path) = analyzer.get("path").and_then(Value::as_str) {
+                    if !path.is_empty() {
+                        settings.binary = path.to_string();
+                    }
+                }
+            }
+        }
+        self.rust = RustBridge::new(settings);
     }
 
     fn handle(&mut self, method: &str, params: &Value) -> Outcome {
         match method {
-            "initialize" => Outcome::Reply(json!({
+            "initialize" => {
+                self.configure(params);
+                Outcome::Reply(json!({
                 "capabilities": {
                     "textDocumentSync": 1, // full text on every change
                     "hoverProvider": true,
@@ -89,8 +113,13 @@ impl Server {
                     },
                 },
                 "serverInfo": { "name": "rsx-lsp", "version": env!("CARGO_PKG_VERSION") },
-            })),
-            "initialized" | "shutdown" => Outcome::Reply(Value::Null),
+                }))
+            }
+            "initialized" => Outcome::Reply(Value::Null),
+            "shutdown" => {
+                self.rust.shutdown();
+                Outcome::Reply(Value::Null)
+            }
 
             "textDocument/didOpen" => {
                 let Some(doc) = params.get("textDocument") else {
@@ -134,10 +163,28 @@ impl Server {
 
             "textDocument/hover" => {
                 let (uri, position) = location(params);
-                let result = self
-                    .store
-                    .get(&uri)
-                    .and_then(|doc| hover::handle(doc, position, &self.store));
+                let Some(document) = self.store.get(&uri) else {
+                    return Outcome::Reply(Value::Null);
+                };
+                let offset = document.offset(position);
+
+                // A cursor inside a Rust fragment is asking about Rust, and
+                // `rust-analyzer` knows more about that than this server ever
+                // will. Markup positions, and anything it cannot answer, fall
+                // back to what the template itself says.
+                let from_rust = self
+                    .rust
+                    .is_enabled()
+                    .then(|| self.rust.hover(document, offset))
+                    .flatten();
+
+                let result = match from_rust {
+                    Some(hover) => Some(hover),
+                    None => {
+                        let document = self.store.get(&uri).expect("still open");
+                        hover::handle(document, position, &self.store)
+                    }
+                };
                 Outcome::Reply(to_value(result))
             }
 
@@ -161,11 +208,25 @@ impl Server {
 
             "textDocument/completion" => {
                 let (uri, position) = location(params);
-                let items = self
-                    .store
-                    .get(&uri)
-                    .map(|doc| completion::handle(doc, position, &self.store))
-                    .unwrap_or_default();
+                let Some(document) = self.store.get(&uri) else {
+                    return Outcome::Reply(to_value(Some(Vec::<Value>::new())));
+                };
+                let offset = document.offset(position);
+
+                let from_rust = self
+                    .rust
+                    .is_enabled()
+                    .then(|| self.rust.completion(document, offset))
+                    .flatten()
+                    .filter(|items| !items.is_empty());
+
+                let items = match from_rust {
+                    Some(items) => items,
+                    None => {
+                        let document = self.store.get(&uri).expect("still open");
+                        completion::handle(document, position, &self.store)
+                    }
+                };
                 Outcome::Reply(to_value(Some(items)))
             }
 

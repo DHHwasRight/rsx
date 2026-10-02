@@ -316,10 +316,43 @@ VS Code extension that starts it.
   props and attributes
 - go to definition on a component call
 - document symbols for the components a file declares
+- **field and method completion inside expressions**, and hover with real
+  types — `{ user.| }` offers `name: String` and `posts: Vec<String>`
 
-It answers questions about the template language. Questions about Rust types —
-what a method returns, whether a field exists — belong to `rust-analyzer`,
-which answers them on the generated code.
+### Rust inside templates
+
+The last one is not this server's own work. A cursor in `{ user.posts.| }` is
+asking a Rust question, and the honest answer is that `rust-analyzer` already
+knows it. So the question is forwarded.
+
+That works because every Rust fragment in a template is copied verbatim into
+the generated code, and the source map records the byte range each one landed
+in. A position in a template therefore has an exact counterpart in real Rust —
+not merely the same line, but the same character, which is what completion
+after a `.` needs.
+
+The file put to `rust-analyzer` is one that genuinely belongs to your crate,
+with its contents overlaid in memory, so the surrounding types, imports and
+dependencies are real:
+
+| How your templates reach the crate | The file asked about |
+| --- | --- |
+| `rsx generate` wrote `card.rs` beside `card.rsx` | that generated file |
+| `rsx::load_dir!("src/views")` in `src/views.rs` | `src/views.rs`, with the macro call replaced by its expansion |
+
+Everything about this degrades quietly. No `rust-analyzer` on `PATH`, a
+template outside any crate, a position in markup rather than Rust — each just
+falls back to what the template server knows on its own. The first question
+that needs Rust waits for the crate to finish indexing, which takes a second
+or two; later ones return immediately. A sibling template that does not parse
+is skipped rather than taking the feature down with it.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `rsx.server.path` | `rsx` | The binary providing the language server |
+| `rsx.server.enabled` | `true` | Set to `false` for highlighting only |
+| `rsx.rustAnalyzer.enabled` | `true` | Consult `rust-analyzer` for Rust expressions |
+| `rsx.rustAnalyzer.path` | `rust-analyzer` | Which analyzer to run |
 
 ## CLI
 
@@ -342,9 +375,9 @@ rsx lsp                   Start the language server on stdin/stdout
 | `rsx-core` | parser, syntax tree, code generator and source map |
 | `rsx-macros` | `load!` and `load_dir!` |
 | `rsx-cli` | the `rsx` binary |
-| `rsx-lsp` | the language server |
+| `rsx-lsp` | the language server, and the bridge to `rust-analyzer` |
 
-`rsx-core` and `rsx` have no dependencies. `rsx-core` has no opinion on how it
+`rsx-core` and `rsx` have no dependencies; `rsx-lsp` has `serde`. `rsx-core` has no opinion on how it
 is driven: `compile_source`, `compile_file` and `compile_dir` are the entry
 points for any other integration, and `generate_with_map` additionally returns
 a `SourceMap` from generated lines back to `.rsx` positions.
@@ -352,9 +385,20 @@ a `SourceMap` from generated lines back to `.rsx` positions.
 ## Tests
 
 ```sh
-cargo test --workspace     # everything
-mise run check             # build, clippy with -D warnings, test
+cargo test --workspace            # the compiler, runtime and language server
+cd editors/vscode && npm test     # the extension, inside a real VS Code
+mise run check                    # build, clippy with -D warnings, test
 ```
+
+The extension tests launch an actual VS Code with `@vscode/test-electron` and
+drive it through the editor API, which is the only way to cover activation,
+the language client and the stdio transport. They caught a bug no unit test
+could: language clients append `--stdio` to the command they spawn, and the
+CLI used to reject it, so the server failed to start in every editor.
+
+The test that asks for field completion after a dot runs against a real
+`rust-analyzer` over a real fixture crate. It is skipped, with a message,
+where the binary is not installed.
 
 `crates/rsx-core/testdata` holds `.rsx` fixtures with their generated `.rs`
 committed beside them, so a change in output shows up as a reviewable diff:
@@ -404,7 +448,8 @@ Three things changed deliberately along the way:
   resolves them through `use`, per file, so two files may each declare a
   `Card`.
 
-The Crystal LSP also indexes Crystal types, for member completion after a dot
-and type hover. There is no equivalent here on purpose: `rust-analyzer` owns
-that question for Rust, and reimplementing it would mean writing a type
-checker.
+The Crystal LSP also indexes Crystal types, so it can complete members after
+a dot. This reaches the same place by a different route: rather than build a
+second type checker, it maps the cursor into the generated Rust and asks
+`rust-analyzer`, which already knows the answer and keeps knowing it as Rust
+changes.

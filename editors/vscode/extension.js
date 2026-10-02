@@ -20,6 +20,14 @@ async function activate(context) {
   const clientOptions = {
     documentSelector: [{ scheme: "file", language: "rsx" }],
     outputChannel: vscode.window.createOutputChannel("RSX Language Server"),
+    // A cursor inside `{ user.posts.| }` is asking a Rust question, and the
+    // server forwards those to rust-analyzer rather than guessing.
+    initializationOptions: {
+      rustAnalyzer: {
+        enabled: config.get("rustAnalyzer.enabled", true),
+        path: config.get("rustAnalyzer.path", "rust-analyzer"),
+      },
+    },
   };
 
   client = new LanguageClient("rsx", "RSX Language Server", serverOptions, clientOptions);

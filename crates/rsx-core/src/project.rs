@@ -49,51 +49,62 @@ impl Compilation {
     /// Renders the compilation as nested `pub mod` declarations mirroring the
     /// directory layout.
     pub fn into_module_tree(self) -> String {
+        self.into_module_tree_with_offsets().0
+    }
+
+    /// The module tree, and where each file's generated code starts in it.
+    ///
+    /// Module bodies are not re-indented. Indenting them would read better,
+    /// but it would shift every byte of the generated code by an amount that
+    /// varies per line, and the offsets in each file's [`SourceMap`] would no
+    /// longer locate anything. Rust does not care about the indentation, and
+    /// keeping it flat means a file's code appears verbatim at a known
+    /// offset, so a position in a template still resolves to a position in
+    /// the tree.
+    pub fn into_module_tree_with_offsets(self) -> (String, BTreeMap<PathBuf, usize>) {
         let mut root = ModuleNode::default();
         for file in self.files {
-            root.insert(&file.module_path, file.code);
+            root.insert(&file.module_path, file.path, file.code);
         }
         let mut out = String::new();
-        root.render(&mut out, 0);
-        out
+        let mut offsets = BTreeMap::new();
+        root.render(&mut out, &mut offsets);
+        (out, offsets)
     }
 }
 
 #[derive(Default)]
 struct ModuleNode {
     children: BTreeMap<String, ModuleNode>,
-    code: Option<String>,
+    code: Option<(PathBuf, String)>,
 }
 
 impl ModuleNode {
-    fn insert(&mut self, path: &[String], code: String) {
+    fn insert(&mut self, path: &[String], source: PathBuf, code: String) {
         match path.split_first() {
-            None => self.code = Some(code),
+            None => self.code = Some((source, code)),
             Some((head, rest)) => self
                 .children
                 .entry(head.clone())
                 .or_default()
-                .insert(rest, code),
+                .insert(rest, source, code),
         }
     }
 
-    fn render(&self, out: &mut String, depth: usize) {
-        let pad = "    ".repeat(depth);
-        if let Some(code) = &self.code {
-            for line in code.lines() {
-                if line.is_empty() {
-                    out.push('\n');
-                } else {
-                    out.push_str(&pad);
-                    out.push_str(line);
-                    out.push('\n');
-                }
+    fn render(&self, out: &mut String, offsets: &mut BTreeMap<PathBuf, usize>) {
+        if let Some((source, code)) = &self.code {
+            offsets.insert(source.clone(), out.len());
+            out.push_str(code);
+            if !code.ends_with('\n') {
+                out.push('\n');
             }
         }
         for (name, child) in &self.children {
-            out.push_str(&format!("{pad}pub mod {name} {{\n"));
-            child.render(out, depth + 1);
-            out.push_str(&format!("{pad}}}\n"));
+            out.push_str("pub mod ");
+            out.push_str(name);
+            out.push_str(" {\n");
+            child.render(out, offsets);
+            out.push_str("}\n");
         }
     }
 }
@@ -121,6 +132,56 @@ pub fn compile_file(path: &Path, options: &Options) -> Result<CompiledFile> {
         code,
         map,
     })
+}
+
+/// Compiles every `.rsx` file under `root`, skipping the ones that fail.
+///
+/// A directory being compiled for an editor almost always contains one file
+/// that does not parse — the one being typed in. Failing the whole directory
+/// there would take Rust support away from every other template at exactly
+/// the moment it is most wanted, so the broken file is left out and reported
+/// separately.
+pub fn compile_dir_lossy(root: &Path, options: &Options) -> (Compilation, Vec<Error>) {
+    let mut errors = Vec::new();
+    let paths = match find_sources(root) {
+        Ok(paths) => paths,
+        Err(error) => return (Compilation::default(), vec![error]),
+    };
+
+    let mut parsed = Vec::new();
+    let mut registry = Registry::new();
+    for path in paths {
+        let source = match read(&path) {
+            Ok(source) => source,
+            Err(error) => {
+                errors.push(error);
+                continue;
+            }
+        };
+        match parser::parse(&source) {
+            Ok(file) => {
+                let module_path = module_path_for(root, &path);
+                registry.add_file_at(&module_path, &file);
+                parsed.push((path, module_path, file));
+            }
+            Err(error) => errors.push(error.in_file(&path)),
+        }
+    }
+
+    let mut files = Vec::with_capacity(parsed.len());
+    for (path, module_path, file) in parsed {
+        match codegen::generate_at(&module_path, &file, &registry, options) {
+            Ok((code, map)) => files.push(CompiledFile {
+                module_path,
+                path,
+                code,
+                map,
+            }),
+            Err(error) => errors.push(error.in_file(&path)),
+        }
+    }
+
+    (Compilation { files, registry }, errors)
 }
 
 /// Compiles every `.rsx` file under `root`, sharing one registry.

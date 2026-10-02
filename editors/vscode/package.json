@@ -46,6 +46,16 @@
           "type": "boolean",
           "default": true,
           "description": "Run the rsx language server. Turn this off to keep syntax highlighting only."
+        },
+        "rsx.rustAnalyzer.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Answer questions about Rust expressions by consulting rust-analyzer. Turn this off to use template-only completion and hover."
+        },
+        "rsx.rustAnalyzer.path": {
+          "type": "string",
+          "default": "rust-analyzer",
+          "description": "Path to the rust-analyzer binary used for Rust expressions inside templates."
         }
       }
     }

@@ -6,7 +6,9 @@
 //! generated code can translate those positions into something the author can
 //! actually edit.
 
-use crate::span::Pos;
+use core::ops::Range;
+
+use crate::span::{Pos, Span};
 
 /// One generated line and the source position it came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,10 +21,36 @@ pub struct Mapping {
     pub col: u32,
 }
 
-/// Generated lines in increasing order, each with its source position.
+/// One run of Rust copied verbatim from the template into the output.
+///
+/// Because the text is copied unchanged, the mapping inside it is a shift:
+/// the nth byte of the fragment in the template is the nth byte of the
+/// fragment in the generated code. That is what makes it possible to ask
+/// `rust-analyzer` about a cursor in the middle of `{ user.posts }`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fragment {
+    /// Byte range in the generated Rust.
+    pub generated: Range<usize>,
+    /// Byte range in the `.rsx` source.
+    pub source: Range<usize>,
+}
+
+impl Fragment {
+    pub fn len(&self) -> usize {
+        self.generated.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.generated.is_empty()
+    }
+}
+
+/// Generated lines in increasing order, each with its source position, plus
+/// the byte-exact ranges of the Rust fragments copied into the output.
 #[derive(Debug, Clone, Default)]
 pub struct SourceMap {
     mappings: Vec<Mapping>,
+    fragments: Vec<Fragment>,
 }
 
 impl SourceMap {
@@ -61,6 +89,48 @@ impl SourceMap {
 
     pub fn mappings(&self) -> &[Mapping] {
         &self.mappings
+    }
+
+    /// Records a fragment of `len` bytes copied from `source` to `generated`.
+    pub fn record_fragment(&mut self, generated: usize, source: Span, len: usize) {
+        if len == 0 {
+            return;
+        }
+        self.fragments.push(Fragment {
+            generated: generated..generated + len,
+            source: source.from.offset..source.from.offset + len,
+        });
+    }
+
+    pub fn fragments(&self) -> &[Fragment] {
+        &self.fragments
+    }
+
+    /// The offset in the generated Rust for a position in the template.
+    ///
+    /// Only positions inside a copied Rust fragment have one; markup has no
+    /// counterpart in the output beyond the string literals it became.
+    pub fn to_generated(&self, source_offset: usize) -> Option<usize> {
+        // An offset at the very end of a fragment still belongs to it: that
+        // is where a cursor sits after typing a `.`.
+        let fragment = self
+            .fragments
+            .iter()
+            .find(|f| source_offset >= f.source.start && source_offset <= f.source.end)?;
+        Some(fragment.generated.start + (source_offset - fragment.source.start))
+    }
+
+    /// The offset in the template for a position in the generated Rust.
+    pub fn to_source(&self, generated_offset: usize) -> Option<usize> {
+        let fragment = self.fragments.iter().find(|f| {
+            generated_offset >= f.generated.start && generated_offset <= f.generated.end
+        })?;
+        Some(fragment.source.start + (generated_offset - fragment.generated.start))
+    }
+
+    /// Whether `source_offset` falls inside a Rust fragment.
+    pub fn is_rust(&self, source_offset: usize) -> bool {
+        self.to_generated(source_offset).is_some()
     }
 
     pub fn is_empty(&self) -> bool {

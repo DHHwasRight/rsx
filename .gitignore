@@ -1,4 +1,6 @@
 /target
+# Build output anywhere, including the editor test fixture crate.
+target/
 **/*.rs.bk
 editors/vscode/node_modules/
 editors/vscode/.vscode-test/

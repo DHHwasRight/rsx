@@ -1,0 +1,9 @@
+# A real crate, so rust-analyzer can answer questions about the Rust inside
+# these templates the way it would in a user's project.
+[package]
+name = "rsx-fixtures"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rsx = { path = "../../../../crates/rsx" }

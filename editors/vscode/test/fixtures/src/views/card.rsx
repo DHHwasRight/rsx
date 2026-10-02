@@ -14,3 +14,7 @@ pub fn Card(title: &str, count: usize) -> Element {
 pub fn Panel(children: Element) -> Element {
     <section class="panel">{children}</section>
 }
+
+pub fn Profile(user: &User) -> Element {
+    <p class="profile">{user.name}</p>
+}

@@ -6,7 +6,66 @@
 //! keeps this crate free of a Rust parser and keeps error messages about Rust
 //! coming from the compiler that actually knows the rules.
 
+use core::fmt;
+use core::ops::Deref;
+
 use crate::span::Span;
+
+/// A fragment of Rust copied from a template, with where it came from.
+///
+/// Keeping the span alongside the text is what lets the generator record a
+/// mapping precise enough to ask `rust-analyzer` about a position inside an
+/// expression — `{ user.|posts }` has to land on the same character of the
+/// generated code, not merely on the same line.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Rust {
+    pub text: String,
+    /// The span of `text` itself, with surrounding whitespace excluded.
+    pub span: Span,
+}
+
+impl Rust {
+    pub fn new(text: impl Into<String>, span: Span) -> Self {
+        Rust {
+            text: text.into(),
+            span,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+}
+
+impl Deref for Rust {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
+
+impl fmt::Display for Rust {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl PartialEq<str> for Rust {
+    fn eq(&self, other: &str) -> bool {
+        self.text == other
+    }
+}
+
+impl PartialEq<&str> for Rust {
+    fn eq(&self, other: &&str) -> bool {
+        self.text == *other
+    }
+}
 
 /// A parsed `.rsx` file.
 #[derive(Debug, Clone, Default)]
@@ -172,13 +231,14 @@ pub struct Text {
 #[derive(Debug, Clone)]
 pub struct Expr {
     pub span: Span,
-    pub source: String,
+    /// The expression, without the braces around it.
+    pub source: Rust,
 }
 
 #[derive(Debug, Clone)]
 pub struct Stmt {
     pub span: Span,
-    pub source: String,
+    pub source: Rust,
 }
 
 /// An HTML element.
@@ -235,7 +295,7 @@ pub enum Attribute {
     Expr {
         span: Span,
         name: String,
-        expr: String,
+        expr: Rust,
     },
     /// `disabled` — present with no value.
     Bare { span: Span, name: String },
@@ -243,10 +303,10 @@ pub enum Attribute {
     Conditional {
         span: Span,
         name: String,
-        expr: String,
+        expr: Rust,
     },
     /// `{ ...attrs }`
-    Spread { span: Span, expr: String },
+    Spread { span: Span, expr: Rust },
 }
 
 impl Attribute {
@@ -275,7 +335,7 @@ impl Attribute {
 pub struct If {
     pub span: Span,
     /// The condition as written, which may be an `if let` pattern.
-    pub cond: String,
+    pub cond: Rust,
     pub then_body: Vec<Node>,
     pub else_ifs: Vec<ElseIf>,
     pub else_body: Option<Vec<Node>>,
@@ -284,7 +344,7 @@ pub struct If {
 #[derive(Debug, Clone)]
 pub struct ElseIf {
     pub span: Span,
-    pub cond: String,
+    pub cond: Rust,
     pub body: Vec<Node>,
 }
 
@@ -292,7 +352,7 @@ pub struct ElseIf {
 pub struct For {
     pub span: Span,
     /// Everything between `for` and the opening brace: `item in &items`.
-    pub header: String,
+    pub header: Rust,
     pub body: Vec<Node>,
 }
 
@@ -300,14 +360,14 @@ pub struct For {
 pub struct While {
     pub span: Span,
     /// Everything between `while` and the opening brace.
-    pub header: String,
+    pub header: Rust,
     pub body: Vec<Node>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Match {
     pub span: Span,
-    pub subject: String,
+    pub subject: Rust,
     pub arms: Vec<MatchArm>,
 }
 
@@ -315,7 +375,7 @@ pub struct Match {
 pub struct MatchArm {
     pub span: Span,
     /// The pattern including any `if` guard, as written.
-    pub pattern: String,
+    pub pattern: Rust,
     pub body: Vec<Node>,
 }
 

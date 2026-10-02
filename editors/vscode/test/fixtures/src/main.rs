@@ -1,0 +1,3 @@
+mod views;
+
+fn main() {}

@@ -133,3 +133,35 @@ fn the_fixtures_cover_every_node_kind() {
         );
     }
 }
+
+#[test]
+fn a_lossy_compile_skips_what_it_cannot_parse() {
+    // An editor compiles a directory on every keystroke, and one of those
+    // files is the one being typed in. Failing the whole directory would take
+    // tooling away from every other template at the worst moment.
+    let dir = std::env::temp_dir().join("rsx-lossy-test");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("good.rsx"),
+        "pub fn Good() -> Element { <p>ok</p> }",
+    )
+    .unwrap();
+    fs::write(dir.join("broken.rsx"), "pub fn Broken() -> Element { <div>").unwrap();
+
+    let (compilation, errors) = project::compile_dir_lossy(&dir, &Options::default());
+
+    assert_eq!(compilation.files.len(), 1, "the good file should survive");
+    assert!(compilation.files[0].path.ends_with("good.rsx"));
+    assert_eq!(errors.len(), 1, "the broken file should be reported");
+    assert!(
+        errors[0].to_string().contains("broken.rsx"),
+        "{}",
+        errors[0]
+    );
+
+    // The strict form still fails, which is what CI wants.
+    assert!(project::compile_dir(&dir, &Options::default()).is_err());
+
+    let _ = fs::remove_dir_all(&dir);
+}

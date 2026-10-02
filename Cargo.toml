@@ -1,5 +1,8 @@
 [workspace]
 resolver = "2"
+# The editor test fixture is a crate of its own so rust-analyzer can load it,
+# but it is not part of this workspace.
+exclude = ["editors"]
 members = [
     "crates/rsx",
     "crates/rsx-core",

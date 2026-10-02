@@ -19,7 +19,16 @@ async function main() {
   fs.mkdirSync(settingsDir, { recursive: true });
   fs.writeFileSync(
     path.join(settingsDir, "settings.json"),
-    JSON.stringify({ "rsx.server.path": server }, null, 2)
+    JSON.stringify(
+      {
+        "rsx.server.path": server,
+        // A GUI process does not inherit a login shell's PATH, so the
+        // analyzer is named outright rather than looked up.
+        "rsx.rustAnalyzer.path": resolveRustAnalyzer(),
+      },
+      null,
+      2
+    )
   );
 
   await runTests({
@@ -54,6 +63,19 @@ function resolveServerBinary() {
     `no rsx binary found; looked in:\n  ${candidates.join("\n  ")}\n` +
       "run `cargo build` first, or set RSX_BINARY"
   );
+}
+
+/// Finds rust-analyzer without relying on the PATH this process inherited.
+function resolveRustAnalyzer() {
+  if (process.env.RUST_ANALYZER) {
+    return process.env.RUST_ANALYZER;
+  }
+  const candidates = [
+    "/opt/homebrew/bin/rust-analyzer",
+    "/usr/local/bin/rust-analyzer",
+    path.join(process.env.HOME || "", ".cargo", "bin", "rust-analyzer"),
+  ];
+  return candidates.find((c) => fs.existsSync(c)) || "rust-analyzer";
 }
 
 main().catch((error) => {

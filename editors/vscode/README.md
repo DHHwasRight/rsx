@@ -14,6 +14,8 @@ server, which the extension starts for you:
   props and attributes
 - go to definition on a component call
 - an outline of the components a file declares
+- field and method completion inside `{ … }` expressions, with real types,
+  by forwarding the question to `rust-analyzer`
 
 ## Installing
 
@@ -39,9 +41,23 @@ For development, open this folder in VS Code and press F5.
 | --- | --- | --- |
 | `rsx.server.path` | `rsx` | Path to the binary providing the language server |
 | `rsx.server.enabled` | `true` | Set to `false` for highlighting without the server |
+| `rsx.rustAnalyzer.enabled` | `true` | Consult `rust-analyzer` for Rust expressions |
+| `rsx.rustAnalyzer.path` | `rust-analyzer` | Which analyzer binary to run |
 
-## Scope
+## How Rust questions are answered
 
-The server answers questions about the template language. Questions about Rust
-types — what a method returns, whether a field exists — are `rust-analyzer`'s
-job, and it answers them on the generated code.
+A cursor inside `{ user.posts.| }` is asking about Rust, not about markup. The
+server maps the position into the generated Rust — byte for byte, through the
+source map — and forwards the question to `rust-analyzer`, which is already
+analysing your crate.
+
+It degrades quietly: with no `rust-analyzer` installed, or for a template that
+belongs to no crate, you still get everything else.
+
+## Testing
+
+```sh
+npm test
+```
+
+This launches a real VS Code and drives the extension through the editor API.

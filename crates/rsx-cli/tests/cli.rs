@@ -50,9 +50,16 @@ fn check_reports_a_clean_tree() {
 fn check_fails_on_a_broken_template() {
     let dir = std::env::temp_dir().join("rsx-cli-test-broken");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("bad.rsx"), "pub fn A() -> Element { <div></span> }").unwrap();
+    std::fs::write(
+        dir.join("bad.rsx"),
+        "pub fn A() -> Element { <div></span> }",
+    )
+    .unwrap();
 
-    let output = rsx().args(["check", dir.to_str().unwrap()]).output().unwrap();
+    let output = rsx()
+        .args(["check", dir.to_str().unwrap()])
+        .output()
+        .unwrap();
 
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("does not match"));
@@ -61,7 +68,10 @@ fn check_fails_on_a_broken_template() {
 
 #[test]
 fn print_writes_generated_rust_to_stdout() {
-    let file = concat!(env!("CARGO_MANIFEST_DIR"), "/../rsx-core/testdata/hello.rsx");
+    let file = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../rsx-core/testdata/hello.rsx"
+    );
     let output = rsx().args(["print", file]).output().unwrap();
 
     assert!(output.status.success());

@@ -8,7 +8,7 @@ const assert = require("assert");
 const path = require("path");
 const vscode = require("vscode");
 
-const FIXTURES = path.resolve(__dirname, "..", "fixtures", "views");
+const FIXTURES = path.resolve(__dirname, "..", "fixtures", "src", "views");
 
 function uri(name) {
   return vscode.Uri.file(path.join(FIXTURES, name));
@@ -226,6 +226,69 @@ suite("rsx extension", function () {
     } finally {
       await vscode.commands.executeCommand("undo");
     }
+  });
+
+  test("completes fields after a dot, from rust-analyzer", async function () {
+    // The whole point of the bridge: inside `{ user.| }` the question is
+    // about Rust, and the answer has to come from something that knows Rust.
+    // rust-analyzer loads the crate the first time, so this one is slow.
+    this.timeout(180000);
+
+    const document = await open("card.rsx");
+    const text = document.getText();
+    const offset = text.indexOf("user.name") + "user.".length;
+    const position = document.positionAt(offset);
+
+    // VS Code mixes word-based suggestions from the open document into the
+    // list, and those appear at once — so waiting for a non-empty list would
+    // finish before the server had said anything. Wait for the fields.
+    const labels = await eventually(
+      async () => {
+        const result = await vscode.commands.executeCommand(
+          "vscode.executeCompletionItemProvider",
+          document.uri,
+          position
+        );
+        const found = (result ? result.items : []).map((i) =>
+          typeof i.label === "string" ? i.label : i.label.label
+        );
+        return found.includes("name") && found.includes("posts") ? found : null;
+      },
+      "field completions after a dot",
+      170000
+    );
+
+    assert.ok(labels.includes("name"), `no name field in ${labels.slice(0, 20)}`);
+    assert.ok(labels.includes("posts"), `no posts field in ${labels.slice(0, 20)}`);
+  });
+
+  test("hovers a field with its Rust type", async function () {
+    this.timeout(180000);
+    const document = await open("card.rsx");
+    const offset = document.getText().indexOf("user.name") + "user.".length + 1;
+
+    const hovers = await eventually(
+      async () => {
+        const result = await vscode.commands.executeCommand(
+          "vscode.executeHoverProvider",
+          document.uri,
+          document.positionAt(offset)
+        );
+        // Until the crate is indexed this is the template's own hover, which
+        // describes the expression rather than its type.
+        const text = (result || [])
+          .flatMap((h) => h.contents.map((c) => (typeof c === "string" ? c : c.value)))
+          .join("\n");
+        return text.includes("String") ? result : null;
+      },
+      "a hover carrying the field type",
+      170000
+    );
+
+    const text = hovers
+      .flatMap((h) => h.contents.map((c) => (typeof c === "string" ? c : c.value)))
+      .join("\n");
+    assert.match(text, /String/, `hover was: ${text}`);
   });
 
   test("updates diagnostics as the document changes", async () => {
