@@ -1,14 +1,13 @@
 # Everything that is not needed to run the extension.
+#
+# node_modules is deliberately NOT listed: `vsce` already drops
+# devDependencies, and hand-listing the runtime ones is how a transitive
+# dependency goes missing. That happened — `minimatch`, reached through the
+# language client, was left out and the installed extension failed to
+# activate with nothing but a stack of module paths.
 .vscode/**
 .vscode-test/**
 test/**
+scripts/**
 *.vsix
 .gitignore
-
-# Keep only the language client the extension requires at runtime.
-node_modules/**
-!node_modules/vscode-languageclient/**
-!node_modules/vscode-jsonrpc/**
-!node_modules/vscode-languageserver-protocol/**
-!node_modules/vscode-languageserver-types/**
-!node_modules/semver/**

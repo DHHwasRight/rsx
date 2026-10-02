@@ -347,6 +347,11 @@ that needs Rust waits for the crate to finish indexing, which takes a second
 or two; later ones return immediately. A sibling template that does not parse
 is skipped rather than taking the feature down with it.
 
+VS Code opens an unfamiliar folder in Restricted Mode, where the extension
+still highlights but the server does not start — it runs a binary a workspace
+setting can name, which is the kind of thing trust exists to gate. Trusting
+the folder starts it immediately.
+
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `rsx.server.path` | `rsx` | The binary providing the language server |
@@ -399,6 +404,13 @@ CLI used to reject it, so the server failed to start in every editor.
 The test that asks for field completion after a dot runs against a real
 `rust-analyzer` over a real fixture crate. It is skipped, with a message,
 where the binary is not installed.
+
+`npm test` also builds the real `.vsix` and checks it: every file the manifest
+names is present, and the entry point's whole dependency graph resolves. That
+one exists because a hand-written `.vscodeignore` whitelist once shipped a
+package missing `minimatch`, which installed cleanly and then failed to
+activate — a failure the in-editor tests cannot see, because they run the
+extension from source where every dependency is there.
 
 `crates/rsx-core/testdata` holds `.rsx` fixtures with their generated `.rs`
 committed beside them, so a change in output shows up as a reviewable diff:

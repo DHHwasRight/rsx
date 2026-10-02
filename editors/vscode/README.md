@@ -35,6 +35,14 @@ code --install-extension rsx-0.1.0.vsix
 
 For development, open this folder in VS Code and press F5.
 
+## Workspace Trust
+
+VS Code opens an unfamiliar folder in Restricted Mode. The extension still
+loads there — syntax highlighting, brackets, indentation all work — but the
+language server does not start, because it runs a binary whose path a
+workspace setting can choose. Click **Trust** (or *Workspaces: Manage
+Workspace Trust*) and the server starts straight away; no reload needed.
+
 ## Settings
 
 | Setting | Default | Meaning |

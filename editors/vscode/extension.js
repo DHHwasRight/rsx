@@ -4,6 +4,24 @@ const { LanguageClient, TransportKind, State } = require("vscode-languageclient/
 let client;
 
 async function activate(context) {
+  // Syntax highlighting is declarative and works anywhere. The language
+  // server is not: it runs a binary whose path can come from workspace
+  // settings, which is exactly the kind of thing Workspace Trust exists to
+  // gate. So in an untrusted workspace the extension still loads — colours,
+  // brackets, indentation — and the server waits for trust to be granted.
+  if (!vscode.workspace.isTrusted) {
+    const granted = vscode.workspace.onDidGrantWorkspaceTrust(() => {
+      granted.dispose();
+      start(context);
+    });
+    context.subscriptions.push(granted);
+    return { client: undefined, started: false, awaitingTrust: true };
+  }
+
+  return start(context);
+}
+
+async function start(context) {
   const config = vscode.workspace.getConfiguration("rsx");
   const serverPath = config.get("server.path", "rsx");
 
@@ -53,6 +71,7 @@ async function activate(context) {
     serverPath,
     started: client.state === State.Running,
     startError,
+    awaitingTrust: false,
   };
 }
 

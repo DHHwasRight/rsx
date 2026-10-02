@@ -70,7 +70,15 @@
     "mocha": "^12.0.3"
   },
   "scripts": {
-    "test": "node ./test/runTest.js",
-    "package": "vsce package"
+    "test": "node ./test/package.test.js && node ./test/runTest.js",
+    "test:package": "node ./test/package.test.js",
+    "test:editor": "node ./test/runTest.js",
+    "package": "node ./scripts/build-package.js"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Syntax highlighting works in a restricted workspace. The language server is not started until the workspace is trusted, because it runs a binary whose path can be set by workspace settings."
+    }
   }
 }
