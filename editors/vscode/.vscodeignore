@@ -1,8 +1,14 @@
+# Everything that is not needed to run the extension.
 .vscode/**
+.vscode-test/**
+test/**
+*.vsix
+.gitignore
+
+# Keep only the language client the extension requires at runtime.
 node_modules/**
 !node_modules/vscode-languageclient/**
 !node_modules/vscode-jsonrpc/**
 !node_modules/vscode-languageserver-protocol/**
 !node_modules/vscode-languageserver-types/**
 !node_modules/semver/**
-.gitignore
