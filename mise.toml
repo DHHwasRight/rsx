@@ -1,0 +1,26 @@
+[tools]
+rust = "1.98"
+
+[tasks.build]
+description = "Build the workspace"
+run = "cargo build --workspace"
+
+[tasks.test]
+description = "Run every test"
+run = "cargo test --workspace"
+
+[tasks.lint]
+description = "Clippy over all targets"
+run = "cargo clippy --all-targets -- -D warnings"
+
+[tasks.fmt]
+description = "Format"
+run = "cargo fmt --all"
+
+[tasks.bench]
+description = "Rough render throughput"
+run = "cargo run --release -p rsx --example bench"
+
+[tasks.check]
+description = "Build, lint and test"
+depends = ["build", "lint", "test"]
