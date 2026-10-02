@@ -20,6 +20,7 @@ Usage:
   rsx generate [paths...]   Write <name>.rs beside each <name>.rsx (default: .)
   rsx check [paths...]      Parse and generate without writing anything
   rsx print <path>          Write the generated Rust for one file to stdout
+  rsx lsp                   Start the language server on stdin/stdout
   rsx help                  Show this message
 
 Options:
@@ -82,6 +83,10 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
             print!("{USAGE}");
             Ok(ExitCode::SUCCESS)
         }
+        "lsp" => match rsx_lsp::run() {
+            Ok(()) => Ok(ExitCode::SUCCESS),
+            Err(e) => Err(format!("language server stopped: {e}")),
+        },
         "generate" => compile(&roots, &options, out_dir.as_deref(), Action::Write),
         "check" => compile(&roots, &options, None, Action::Check),
         "print" => compile(&roots, &options, None, Action::Print),

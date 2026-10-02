@@ -38,7 +38,7 @@ rsx = { path = "crates/rsx" }
 
 ```rust
 // src/views.rs
-rsx::load_dir!("src/views");   // every .rsx under the directory
+rsx::load_dir!("src/views");        // every .rsx under the directory
 // or
 rsx::load!("src/views/card.rsx");   // one file
 ```
@@ -51,7 +51,7 @@ let html = views::card::Card { title: "Hi", count: 2 }.render_to_string()?;
 
 Paths are relative to the crate root (`CARGO_MANIFEST_DIR`). No `build.rs` is
 involved: the macro compiles the templates during expansion and emits an
-`include_bytes!` for every file it read, which is what makes cargo rebuild
+`include_bytes!` for every file it reads, which is what makes cargo rebuild
 when a template changes.
 
 ## Syntax
@@ -60,14 +60,18 @@ when a template changes.
 
 A component is a function returning `Element`. Its name must start with an
 uppercase letter, because that is how markup tells a component from an HTML
-element. Visibility, generics and `where` clauses are ordinary Rust.
+element. Visibility, generics, `where` clauses and `mut` parameters are
+ordinary Rust.
 
 ```rust
 pub fn Badge(label: &str) -> Element {
     <span class="badge">{label}</span>
 }
 
-pub(crate) fn List<T: std::fmt::Display>(items: &[T]) -> Element where T: Clone {
+pub(crate) fn List<T: std::fmt::Display>(items: &[T]) -> Element
+where
+    T: Clone,
+{
     <ul>
         for item in items {
             <li>{item}</li>
@@ -106,7 +110,7 @@ compile time.
 
 | Syntax | Renders |
 | --- | --- |
-| `plain text` | verbatim, including HTML entities you write yourself |
+| `plain text` | verbatim, with character references preserved |
 | `{ expr }` | the value's `Display` output, HTML-escaped |
 | `{! expr }` | the value's `Display` output, **not** escaped |
 
@@ -116,9 +120,14 @@ goes straight into the output buffer through an escaping adapter.
 `{! }` is how you render HTML you built elsewhere. Passing user input through
 it is an XSS vulnerability.
 
+Static text is escaped, but an author writing HTML means the entities they
+type. A bare `&` becomes `&amp;`, while `&amp;`, `&nbsp;` and `&#8212;` are
+left as the references they already are — so `AT&T` and `Tom &amp; Jerry` both
+come out right.
+
 Whitespace follows HTML: runs collapse to a single space, indentation around a
 text run is dropped, and a space between two words or two inline elements is
-kept. `<p>{n} items</p>` renders `3 items`, and
+kept. `<p>{n} items</p>` renders `3 items`,
 
 ```rust
 <p>
@@ -126,7 +135,7 @@ kept. `<p>{n} items</p>` renders `3 items`, and
 </p>
 ```
 
-renders `<p>Hello</p>`.
+renders `<p>Hello</p>`, and `<b>a</b> <i>b</i>` keeps the space between them.
 
 ### Attributes
 
@@ -141,7 +150,7 @@ renders `<p>Hello</p>`.
 ```
 
 Attribute names are taken as written, so `data-id`, `aria-label`, `@click` and
-`:class` all work.
+`:class` all work, and so does `xlink:href` on an SVG element.
 
 A spread takes anything iterable as key/value pairs — a `HashMap`, a
 `BTreeMap`, a slice of tuples. A `bool` value renders as a bare attribute when
@@ -177,21 +186,28 @@ Markup elements are statements, and Rust's control flow contains them:
 </ul>
 ```
 
-`let`, `while`, `loop` and bare statements work too. Nothing is collected into
-an intermediate tree: a loop writes each iteration straight into the output.
+`let`, `while`, `loop` and bare statements such as `n -= 1;` or
+`buf.push(x);` work too. Nothing is collected into an intermediate tree: a
+loop writes each iteration straight into the output.
 
-A keyword is only treated as Rust at the start of a line (or at the start of a
-block), and only when the construct it opens is actually there. So
+#### How Rust is told from text
+
+Inside markup, a keyword is read as Rust only at the start of a line or as the
+first thing in a block, and only when the construct it opens actually follows.
+So this is text:
 
 ```rust
 <p>
-    if you ask me, this is text
+    if you ask me, this is prose
 </p>
 ```
 
-is text, because no `{` follows. One case needs care: `if a<b {` has a `<`
-followed by a letter, which reads as a tag. Write `if a < b {` — with spaces —
-and it parses as the comparison it is.
+because no `{` follows. The same check keeps `Bash (the shell); see below`
+from reading as a function call — a statement's `(` has to be flush against
+its name, the way Rust is written.
+
+One case needs care. `if a<b {` has a `<` followed by a letter, which reads as
+a tag. Write `if a < b {`, with spaces, and it parses as the comparison it is.
 
 ### Fragments, comments, doctype
 
@@ -208,17 +224,18 @@ pub fn Head(title: &str) -> Element {
 
 ### `<script>` and `<style>`
 
-Their content is character data, so `<` does not open a tag and `{` does not
-interpolate — a CSS rule or a JavaScript block survives intact:
+Their content is character data, so `<` does not open a tag, `{` does not
+interpolate, and nothing is escaped — a CSS rule or a JavaScript block
+survives intact:
 
 ```rust
 <style>body { color: red; }</style>
 <script>if (a < b) { go("x"); }</script>
 ```
 
-`{! expr }` is still honoured there, as a deliberate escape hatch. Interpolating
-untrusted data into a script is an injection vulnerability; HTML escaping does
-not make JavaScript safe.
+`{! expr }` is still honoured there, as a deliberate escape hatch.
+Interpolating untrusted data into a script is an injection vulnerability; HTML
+escaping does not make JavaScript safe.
 
 ## What gets generated
 
@@ -229,9 +246,9 @@ Each component produces four items. For `pub fn Card(title: &str, count: usize)`
 // batched into one call.
 pub fn card(__w: &mut rsx::Writer<'_>, title: &str, count: usize) -> rsx::Result {
     __w.raw("<div class=\"card\"><h2>")?;
-    __w.text(title)?;
+    __w.text(&(title))?;
     __w.raw("</h2><span>")?;
-    __w.text(count)?;
+    __w.text(&(count))?;
     __w.raw("</span></div>")?;
     Ok(())
 }
@@ -249,6 +266,17 @@ to be in scope.
 
 A braced struct lives only in the type namespace and a function only in the
 value namespace, so the struct and the constructor can share a name.
+
+Interpolation borrows rather than moves, so `{row.name}` works when `name` is
+a `String` reached through a shared reference.
+
+### Resolving component names
+
+A call is checked against the component it would actually reach: the one
+declared in the same file, or the one a `use` brought in. Two files may each
+declare a `Card` without colliding. A name that cannot be resolved — a
+component written by hand in Rust, or one from another crate — is passed
+through for `rustc` to check.
 
 ## Runtime
 
@@ -272,15 +300,38 @@ instead of being held whole.
 `Template` is implemented for `()` (renders nothing), `Option<T>` and `Vec<T>`,
 and `rsx::from_fn` wraps a closure as one.
 
+Rendering a 200-row table that needs escaping runs at roughly 1.5–2 GB/s,
+whether into a fresh `String` or a reused buffer — about 13–17 µs for a 25 KB
+page (`cargo run --release -p rsx --example bench`).
+
+## Editor support
+
+`rsx lsp` is a language server for `.rsx` files, and `editors/vscode` is a
+VS Code extension that starts it.
+
+- diagnostics as you type, including the ones only code generation finds, such
+  as a prop a component does not declare
+- hover for components, parameters, elements and expressions
+- completion after `<` for components and HTML elements, and inside a tag for
+  props and attributes
+- go to definition on a component call
+- document symbols for the components a file declares
+
+It answers questions about the template language. Questions about Rust types —
+what a method returns, whether a field exists — belong to `rust-analyzer`,
+which answers them on the generated code.
+
 ## CLI
 
 The macro is the usual path. The `rsx` binary exists for inspecting the
-generated Rust, checking templates in CI, and build systems that are not cargo.
+generated Rust, checking templates in CI, build systems that are not cargo,
+and running the language server.
 
 ```
 rsx generate [paths...]   Write <name>.rs beside each <name>.rsx
 rsx check [paths...]      Parse and generate without writing
 rsx print <path>          Write the generated Rust to stdout
+rsx lsp                   Start the language server on stdin/stdout
 ```
 
 ## Crates
@@ -288,23 +339,72 @@ rsx print <path>          Write the generated Rust to stdout
 | Crate | What it is |
 | --- | --- |
 | `rsx` | the runtime, and the macros re-exported |
-| `rsx-core` | parser, syntax tree and code generator |
+| `rsx-core` | parser, syntax tree, code generator and source map |
 | `rsx-macros` | `load!` and `load_dir!` |
 | `rsx-cli` | the `rsx` binary |
+| `rsx-lsp` | the language server |
 
-`rsx-core` has no dependencies and no opinion on how it is driven:
-`compile_source`, `compile_file` and `compile_dir` are the entry points for
-any other integration.
+`rsx-core` and `rsx` have no dependencies. `rsx-core` has no opinion on how it
+is driven: `compile_source`, `compile_file` and `compile_dir` are the entry
+points for any other integration, and `generate_with_map` additionally returns
+a `SourceMap` from generated lines back to `.rsx` positions.
+
+## Tests
+
+```sh
+cargo test --workspace     # everything
+mise run check             # build, clippy with -D warnings, test
+```
+
+`crates/rsx-core/testdata` holds `.rsx` fixtures with their generated `.rs`
+committed beside them, so a change in output shows up as a reviewable diff:
+
+```sh
+UPDATE_GOLDEN=1 cargo test -p rsx-core --test golden
+```
+
+One test asserts the fixtures still exercise every kind of node, so the set
+cannot quietly stop covering a feature.
 
 ## Limitations
 
-- Parameter types that elide a lifetime inside a path — `Foo<'_>` or a `Foo`
+- Parameter types that elide a lifetime inside a path — `Foo<'_>`, or a `Foo`
   that has a lifetime parameter — need it written out, because the generated
   struct cannot elide it. Plain `&T` and `&mut T` are handled.
 - `impl Trait` in parameter position is rejected with a suggestion to use a
   named generic, since it cannot be a struct field.
 - Parameters have no default values. Rust has none either; use `Option<T>`.
+- There is no macro that takes template source inline. A proc macro receives
+  its input already tokenised, and tokenising discards the spacing markup
+  depends on: `<h1>Hello, {name}!</h1>` would render with a space before the
+  comma.
 - Diagnostics for template syntax point into the `.rsx` file. Diagnostics for
   the Rust *inside* a template come from `rustc` and point at the macro call
   site, because a proc macro cannot attach spans to a file it read. When one
-  is unclear, `rsx print` shows the generated Rust.
+  is unclear, `rsx print` shows the generated Rust, and `rsx generate` writes
+  it to a file `rustc` can point into directly.
+
+## Lineage
+
+This is a Rust descendant of [`crx`](../../crystal/templ), a Crystal shard,
+which was itself a descendant of Go's `templ`. The feature set is the same one
+that suite covers — control flow, children, fragments, raw output, spreads,
+entity-aware escaping, source maps, a language server — with the syntax moved
+from Crystal to Rust and nudged toward JSX.
+
+Three things changed deliberately along the way:
+
+- **Whitespace.** `crx` strips the leading whitespace of every text run, which
+  silently glues `{n}` to `items` in `<p>{n} items</p>`. Edge whitespace now
+  survives unless its run spans a newline.
+- **Bare statements.** `crx` treats a statement with no keyword as text, so it
+  ends up in the page. Here `n -= 1;` is recognised by shape and emitted as
+  Rust.
+- **Name resolution.** `crx` resolves components through `require`; this
+  resolves them through `use`, per file, so two files may each declare a
+  `Card`.
+
+The Crystal LSP also indexes Crystal types, for member completion after a dot
+and type hover. There is no equivalent here on purpose: `rust-analyzer` owns
+that question for Rust, and reimplementing it would mean writing a type
+checker.

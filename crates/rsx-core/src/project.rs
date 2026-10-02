@@ -14,6 +14,7 @@ use crate::error::{Error, Result};
 use crate::naming::to_module_name;
 use crate::parser;
 use crate::registry::Registry;
+use crate::source_map::SourceMap;
 use crate::span::Span;
 
 /// The file extension this crate compiles.
@@ -28,6 +29,8 @@ pub struct CompiledFile {
     pub module_path: Vec<String>,
     /// The generated Rust.
     pub code: String,
+    /// Maps lines of `code` back to positions in `path`.
+    pub map: SourceMap,
 }
 
 /// The result of compiling a directory.
@@ -110,11 +113,13 @@ pub fn compile_file(path: &Path, options: &Options) -> Result<CompiledFile> {
     let file = parser::parse(&source).map_err(|e| e.in_file(path))?;
     let mut registry = Registry::new();
     registry.add_file(&file);
-    let code = codegen::generate(&file, &registry, options).map_err(|e| e.in_file(path))?;
+    let (code, map) =
+        codegen::generate_with_map(&file, &registry, options).map_err(|e| e.in_file(path))?;
     Ok(CompiledFile {
         path: path.to_path_buf(),
         module_path: vec![module_name_for(path)],
         code,
+        map,
     })
 }
 
@@ -135,18 +140,22 @@ pub fn compile_dir(root: &Path, options: &Options) -> Result<Compilation> {
     for path in paths {
         let source = read(&path)?;
         let file = parser::parse(&source).map_err(|e| e.in_file(&path))?;
-        registry.add_file(&file);
-        parsed.push((path, file));
+        let module_path = module_path_for(root, &path);
+        registry.add_file_at(&module_path, &file);
+        parsed.push((path, module_path, file));
     }
 
-    // Pass two: generate.
+    // Pass two: generate. Each file resolves component names through its own
+    // scope, so two files may each declare a `Card` without colliding.
     let mut files = Vec::with_capacity(parsed.len());
-    for (path, file) in parsed {
-        let code = codegen::generate(&file, &registry, options).map_err(|e| e.in_file(&path))?;
+    for (path, module_path, file) in parsed {
+        let (code, map) = codegen::generate_at(&module_path, &file, &registry, options)
+            .map_err(|e| e.in_file(&path))?;
         files.push(CompiledFile {
-            module_path: module_path_for(root, &path),
+            module_path,
             path,
             code,
+            map,
         });
     }
 

@@ -23,14 +23,16 @@ pub mod parser;
 pub mod project;
 pub mod registry;
 mod scanner;
+pub mod source_map;
 pub mod span;
 
 pub use ast::File;
-pub use codegen::{generate, Options};
+pub use codegen::{generate, generate_at, generate_with_map, Options};
 pub use error::{Error, Result};
 pub use parser::parse;
 pub use project::{
     compile_dir, compile_file, compile_source, Compilation, CompiledFile, EXTENSION,
 };
-pub use registry::Registry;
+pub use registry::{Registry, Scope};
+pub use source_map::{Mapping, SourceMap};
 pub use span::{Pos, Span};

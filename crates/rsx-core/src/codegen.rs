@@ -18,7 +18,9 @@ use std::fmt::Write as _;
 use crate::ast::*;
 use crate::error::{Error, Result};
 use crate::naming::{to_snake_case, SYNTH_LIFETIME_PREFIX};
-use crate::registry::Registry;
+use crate::registry::{Registry, Scope};
+use crate::source_map::SourceMap;
+use crate::span::Pos;
 
 /// Code generation settings.
 #[derive(Debug, Clone)]
@@ -40,13 +42,40 @@ impl Default for Options {
 
 /// Generates Rust source for a parsed file.
 pub fn generate(file: &File, registry: &Registry, options: &Options) -> Result<String> {
+    generate_with_map(file, registry, options).map(|(code, _)| code)
+}
+
+/// Generates Rust source along with the map from its lines back to the `.rsx`.
+pub fn generate_with_map(
+    file: &File,
+    registry: &Registry,
+    options: &Options,
+) -> Result<(String, SourceMap)> {
+    generate_in(file, &registry.scope(&[], file), options)
+}
+
+/// Generates a file that sits at `module_path` within a larger compilation.
+pub fn generate_at(
+    module_path: &[String],
+    file: &File,
+    registry: &Registry,
+    options: &Options,
+) -> Result<(String, SourceMap)> {
+    generate_in(file, &registry.scope(module_path, file), options)
+}
+
+fn generate_in(file: &File, scope: &Scope<'_>, options: &Options) -> Result<(String, SourceMap)> {
     let mut gen = Generator {
         out: String::new(),
         depth: 0,
         rt: options.runtime.clone(),
-        registry,
+        scope,
         statics: String::new(),
+        statics_origin: None,
         children_params: Vec::new(),
+        map: SourceMap::new(),
+        generated_line: 0,
+        position: None,
     };
 
     if options.header {
@@ -62,13 +91,14 @@ pub fn generate(file: &File, registry: &Registry, options: &Options) -> Result<S
                 // passing the original through as well would stack blank lines.
                 if !rust.source.trim().is_empty() {
                     gen.separate();
-                    gen.out.push_str(rust.source.trim());
-                    gen.out.push('\n');
+                    let text = format!("{}\n", rust.source.trim());
+                    gen.emit(&text);
                 }
             }
             Item::Component(component) => {
                 gen.separate();
-                gen.component(component)?;
+                let pos = component.span.from;
+                gen.at(pos, |gen| gen.component(component))?;
             }
         }
     }
@@ -76,23 +106,35 @@ pub fn generate(file: &File, registry: &Registry, options: &Options) -> Result<S
     if !gen.out.ends_with('\n') {
         gen.out.push('\n');
     }
-    Ok(gen.out)
+    Ok((gen.out, gen.map))
 }
 
-struct Generator<'a> {
+struct Generator<'a, 'r> {
     out: String,
     depth: usize,
     rt: String,
-    registry: &'a Registry,
+    scope: &'a Scope<'r>,
     /// Pending static HTML, batched into one `raw` call.
     statics: String,
+    /// Where the pending run of static HTML began. A run can span several
+    /// nodes, and it belongs to the first of them rather than to whichever
+    /// node happened to force the flush.
+    statics_origin: Option<Pos>,
     /// Parameters of the component being generated that carry markup.
     children_params: Vec<String>,
+    map: SourceMap,
+    /// Lines written so far. Every line leaves through `emit`, so counting
+    /// there keeps the map exact.
+    generated_line: u32,
+    /// The node currently being generated, if any.
+    position: Option<Pos>,
 }
 
 /// A component parameter resolved for code generation.
 struct ResolvedParam {
     name: String,
+    /// Whether the writer function binds this parameter `mut`.
+    mutable: bool,
     /// The type as it appears in the generated function.
     fn_ty: String,
     /// The type as it appears in the generated struct, with named lifetimes.
@@ -100,19 +142,30 @@ struct ResolvedParam {
     is_children: bool,
 }
 
-impl Generator<'_> {
+impl Generator<'_, '_> {
     // ---------------------------------------------------------------- emit
 
-    fn line(&mut self, s: &str) {
-        for _ in 0..self.depth {
-            self.out.push_str("    ");
+    /// Appends text, keeping the line count and the source map in step.
+    fn emit(&mut self, text: &str) {
+        if let Some(pos) = self.position {
+            self.map.record(self.generated_line + 1, pos);
         }
-        self.out.push_str(s);
-        self.out.push('\n');
+        self.out.push_str(text);
+        self.generated_line += text.matches('\n').count() as u32;
+    }
+
+    fn line(&mut self, s: &str) {
+        let mut buffer = String::with_capacity(s.len() + self.depth * 4 + 1);
+        for _ in 0..self.depth {
+            buffer.push_str("    ");
+        }
+        buffer.push_str(s);
+        buffer.push('\n');
+        self.emit(&buffer);
     }
 
     fn blank(&mut self) {
-        self.out.push('\n');
+        self.emit("\n");
     }
 
     /// Ensures exactly one blank line before the next item.
@@ -122,8 +175,18 @@ impl Generator<'_> {
         }
         while self.out.ends_with('\n') {
             self.out.pop();
+            self.generated_line -= 1;
         }
         self.out.push_str("\n\n");
+        self.generated_line += 2;
+    }
+
+    /// Runs `body` with `pos` as the position every emitted line maps to.
+    fn at<T>(&mut self, pos: Pos, body: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = self.position.replace(pos);
+        let result = body(self);
+        self.position = saved;
+        result
     }
 
     fn open(&mut self, s: &str) {
@@ -138,17 +201,28 @@ impl Generator<'_> {
 
     /// Queues static HTML for the next `raw` call.
     fn push_static(&mut self, s: &str) {
+        if self.statics_origin.is_none() {
+            self.statics_origin = self.position;
+        }
         self.statics.push_str(s);
     }
 
     /// Emits everything queued by `push_static` as one call.
     fn flush_statics(&mut self) {
         if self.statics.is_empty() {
+            self.statics_origin = None;
             return;
         }
         let batched = std::mem::take(&mut self.statics);
+        let origin = self.statics_origin.take();
         let literal = rust_string_literal(&batched);
+
+        let saved = self.position;
+        if origin.is_some() {
+            self.position = origin;
+        }
         self.line(&format!("__w.raw({literal})?;"));
+        self.position = saved;
     }
 
     // ----------------------------------------------------------- component
@@ -198,7 +272,10 @@ impl Generator<'_> {
         let fn_generics = generics.fn_decl();
         let fn_params = params
             .iter()
-            .map(|p| format!(", {}: {}", p.name, p.fn_ty))
+            .map(|p| {
+                let binding = if p.mutable { "mut " } else { "" };
+                format!(", {binding}{}: {}", p.name, p.fn_ty)
+            })
             .collect::<String>();
         let vis = vis_prefix(&c.vis);
         self.line("#[inline]");
@@ -297,6 +374,7 @@ impl Generator<'_> {
                 children_index += 1;
                 resolved.push(ResolvedParam {
                     name: param.name.clone(),
+                    mutable: param.mutable,
                     fn_ty: ty.clone(),
                     struct_ty: ty,
                     is_children: true,
@@ -307,6 +385,7 @@ impl Generator<'_> {
             let struct_ty = name_elided_lifetimes(&param.ty, &mut synth);
             resolved.push(ResolvedParam {
                 name: param.name.clone(),
+                mutable: param.mutable,
                 fn_ty: param.ty.clone(),
                 struct_ty,
                 is_children: false,
@@ -326,9 +405,14 @@ impl Generator<'_> {
     }
 
     fn node(&mut self, node: &Node) -> Result<()> {
+        let pos = node.span().from;
+        self.at(pos, |gen| gen.node_inner(node))
+    }
+
+    fn node_inner(&mut self, node: &Node) -> Result<()> {
         match node {
             Node::Text(t) => {
-                self.push_static(&t.value);
+                self.push_static(&escape_static_text(&t.value));
                 Ok(())
             }
             Node::Doctype(t) => {
@@ -433,7 +517,7 @@ impl Generator<'_> {
         for attr in &e.attrs {
             match attr {
                 Attribute::Static { name, value, .. } => {
-                    self.push_static(&format!(" {name}=\"{}\"", escape_attr(value)));
+                    self.push_static(&format!(" {name}=\"{}\"", escape_static_attr(value)));
                 }
                 Attribute::Bare { name, .. } => {
                     self.push_static(&format!(" {name}"));
@@ -463,6 +547,9 @@ impl Generator<'_> {
         }
 
         if e.raw_text {
+            // Character data: a browser does not resolve references inside
+            // `<script>` or `<style>`, so escaping `&` or `<` here would
+            // corrupt the very JavaScript and CSS it is meant to protect.
             for child in &e.children {
                 match child {
                     Node::Text(t) => self.push_static(&t.value),
@@ -481,7 +568,7 @@ impl Generator<'_> {
         self.flush_statics();
         const CHILDREN_LOCAL: &str = "__rsx_children";
 
-        let signature = self.registry.get(call.name());
+        let signature = self.scope.get(call.name());
         let mut fields: Vec<String> = Vec::new();
         let mut spread: Option<String> = None;
         let mut provided: BTreeSet<String> = BTreeSet::new();
@@ -820,18 +907,111 @@ fn rust_string_literal(s: &str) -> String {
     out
 }
 
-/// Escapes a literal attribute value written in the template.
-fn escape_attr(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("&#34;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            c => out.push(c),
+/// Escapes static text written in a template.
+///
+/// Templates are written as HTML, so an author who types `&amp;` or `&nbsp;`
+/// means the character reference, not a literal ampersand — escaping it again
+/// would render `&amp;amp;`. A bare `&`, as in `AT&T`, does get escaped.
+fn escape_static_text(s: &str) -> String {
+    escape_static(s, false)
+}
+
+/// The same rule for a literal attribute value, which also has to escape the
+/// quote characters that would end it.
+fn escape_static_attr(s: &str) -> String {
+    escape_static(s, true)
+}
+
+fn escape_static(s: &str, attribute: bool) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'&' => {
+                if character_reference_len(&bytes[i..]).is_some() {
+                    out.push('&');
+                } else {
+                    out.push_str("&amp;");
+                }
+                i += 1;
+            }
+            b'<' => {
+                out.push_str("&lt;");
+                i += 1;
+            }
+            b'>' => {
+                out.push_str("&gt;");
+                i += 1;
+            }
+            b'"' if attribute => {
+                out.push_str("&#34;");
+                i += 1;
+            }
+            b'\'' if attribute => {
+                out.push_str("&#39;");
+                i += 1;
+            }
+            b => {
+                let len = utf8_len(b);
+                out.push_str(&s[i..i + len]);
+                i += len;
+            }
         }
     }
+
     out
+}
+
+/// Length of the character reference starting at `bytes`, if there is one.
+///
+/// Accepts the three HTML forms: `&name;`, `&#1234;` and `&#x1F600;`. The
+/// bounds match what a browser will accept, so an `&` followed by a long run
+/// of letters and a semicolon is still treated as a literal ampersand.
+fn character_reference_len(bytes: &[u8]) -> Option<usize> {
+    debug_assert_eq!(bytes.first(), Some(&b'&'));
+    let rest = bytes.get(1..)?;
+
+    let (digits, radix_offset): (&[u8], usize) = match rest.first()? {
+        b'#' => match rest.get(1) {
+            Some(b'x') | Some(b'X') => (rest.get(2..)?, 2),
+            _ => (rest.get(1..)?, 1),
+        },
+        _ => {
+            // A named reference: a letter, then letters and digits.
+            if !rest[0].is_ascii_alphabetic() {
+                return None;
+            }
+            let len = rest
+                .iter()
+                .take_while(|b| b.is_ascii_alphanumeric())
+                .count();
+            // Between 2 and 32 characters, then a semicolon.
+            if (2..=32).contains(&len) && rest.get(len) == Some(&b';') {
+                return Some(1 + len + 1);
+            }
+            return None;
+        }
+    };
+
+    let hex = radix_offset == 2;
+    let len = digits
+        .iter()
+        .take_while(|b| {
+            if hex {
+                b.is_ascii_hexdigit()
+            } else {
+                b.is_ascii_digit()
+            }
+        })
+        .count();
+    let max = if hex { 6 } else { 7 };
+    if (1..=max).contains(&len) && digits.get(len) == Some(&b';') {
+        Some(1 + radix_offset + len + 1)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -872,6 +1052,38 @@ mod tests {
         assert_eq!(generic_name("'a"), "'a");
         assert_eq!(generic_name("T: Display"), "T");
         assert_eq!(generic_name("const N: usize"), "N");
+    }
+
+    #[test]
+    fn escapes_bare_ampersands_but_not_references() {
+        assert_eq!(escape_static_text("AT&T"), "AT&amp;T");
+        assert_eq!(escape_static_text("Tom &amp; Jerry"), "Tom &amp; Jerry");
+        assert_eq!(escape_static_text("1&nbsp;000"), "1&nbsp;000");
+        assert_eq!(escape_static_text("&#8212; &#x2014;"), "&#8212; &#x2014;");
+        assert_eq!(escape_static_text("R&D and more"), "R&amp;D and more");
+        assert_eq!(escape_static_text("a &lt; b"), "a &lt; b");
+    }
+
+    #[test]
+    fn escapes_angle_brackets_in_static_text() {
+        assert_eq!(escape_static_text("a < b > c"), "a &lt; b &gt; c");
+    }
+
+    #[test]
+    fn escapes_quotes_only_in_attributes() {
+        assert_eq!(escape_static_text("say \"hi\""), "say \"hi\"");
+        assert_eq!(escape_static_attr("say \"hi\""), "say &#34;hi&#34;");
+        assert_eq!(escape_static_attr("it's"), "it&#39;s");
+    }
+
+    #[test]
+    fn rejects_malformed_character_references() {
+        // No semicolon, too long, or empty: all literal ampersands.
+        assert_eq!(escape_static_text("&amp"), "&amp;amp");
+        assert_eq!(escape_static_text("&a;"), "&amp;a;");
+        assert_eq!(escape_static_text("&#;"), "&amp;#;");
+        assert_eq!(escape_static_text("&#12345678;"), "&amp;#12345678;");
+        assert_eq!(escape_static_text("& "), "&amp; ");
     }
 
     #[test]

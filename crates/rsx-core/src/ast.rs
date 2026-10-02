@@ -12,6 +12,9 @@ use crate::span::Span;
 #[derive(Debug, Clone, Default)]
 pub struct File {
     pub items: Vec<Item>,
+    /// The `use` declarations, which decide what component names this file can
+    /// see from elsewhere in the compilation.
+    pub uses: Vec<UseDecl>,
     pub span: Span,
 }
 
@@ -42,6 +45,29 @@ pub enum Item {
 pub struct RustItem {
     pub span: Span,
     pub source: String,
+}
+
+/// One name brought into scope by a `use` declaration.
+///
+/// `use a::b::{C, D as E};` yields two of these, and `use a::b::*;` yields one
+/// whose name is [`UseDecl::GLOB`].
+#[derive(Debug, Clone)]
+pub struct UseDecl {
+    pub span: Span,
+    /// The name as it is used in this file — the alias when there is one.
+    pub name: String,
+    /// The module path the name comes from, with `self` and `crate` stripped
+    /// and `super` kept so relative depth can be resolved.
+    pub module: Vec<String>,
+}
+
+impl UseDecl {
+    /// The name given to a `use …::*;` glob import.
+    pub const GLOB: &'static str = "*";
+
+    pub fn is_glob(&self) -> bool {
+        self.name == Self::GLOB
+    }
 }
 
 /// A component: `pub fn Card(title: &str) -> Element { <markup/> }`.
@@ -79,6 +105,11 @@ impl Component {
 #[derive(Debug, Clone)]
 pub struct Param {
     pub span: Span,
+    /// Declared `mut`, as in `fn Countdown(mut n: u32)`.
+    ///
+    /// The binding is the writer function's business; the generated struct
+    /// stores a plain field either way.
+    pub mutable: bool,
     pub name: String,
     /// The type as written. `Element` marks a children parameter.
     pub ty: String,

@@ -118,8 +118,18 @@ impl<'a> Parser<'a> {
             }
         }
 
+        let uses = items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Rust(rust) => Some(rust),
+                Item::Component(_) => None,
+            })
+            .flat_map(|rust| parse_use_decls(&rust.source, rust.span))
+            .collect();
+
         Ok(File {
             span: Span::new(start, self.sc.pos()),
+            uses,
             items,
         })
     }
@@ -407,6 +417,10 @@ impl<'a> Parser<'a> {
             }
 
             let from = self.sc.pos();
+            let mutable = self.sc.eat_keyword("mut");
+            if mutable {
+                self.sc.skip_trivia();
+            }
             let name = self.sc.read_ident();
             if name.is_empty() {
                 return self.err("expected a parameter name", Span::new(from, self.sc.pos()));
@@ -433,6 +447,7 @@ impl<'a> Parser<'a> {
 
             params.push(Param {
                 span: Span::new(from, self.sc.pos()),
+                mutable,
                 name,
                 ty,
                 ty_span,
@@ -456,8 +471,9 @@ impl<'a> Parser<'a> {
         //
         // Leading whitespace in a block is layout rather than content, so it
         // can be skipped to put the cursor on the keyword. In an element's
-        // children the same whitespace may be a word separator, so it stays.
-        let mut first = ctx == Ctx::Block;
+        // children the same whitespace may be a word separator, so it is only
+        // skipped if a control structure really does follow it.
+        let mut first = true;
         if ctx == Ctx::Block {
             self.sc.skip_ws();
         }
@@ -495,7 +511,19 @@ impl<'a> Parser<'a> {
                 first = false;
                 continue;
             } else if self.sc.at_line_start() || first {
-                if let Some(control) = self.control_ahead() {
+                // `<ul> for item in items { … }` keeps the loop on the line
+                // that opened the element. Without this the loop would be
+                // emitted into the page as text, which is a silent wrong
+                // answer rather than an error.
+                let resume = self.sc.pos();
+                if first && !self.sc.at_line_start() {
+                    self.sc.skip_ws();
+                }
+                let control = self.control_ahead();
+                if control.is_none() {
+                    self.sc.restore(resume);
+                }
+                if let Some(control) = control {
                     match control {
                         Control::Block(kw) => {
                             nodes.push(self.parse_control_block(kw)?);
@@ -551,7 +579,55 @@ impl<'a> Parser<'a> {
                 return self.terminator_ahead(b'{').then_some(Control::Block(kw));
             }
         }
-        None
+
+        // A bare statement — `n -= 1;`, `buf.push(x);`, `log!("hi");` — has no
+        // keyword to recognise it by, so it is identified by shape instead:
+        // a path, then something only Rust would write after one, then a `;`
+        // before any markup. Prose does not look like that, and the
+        // alternative is emitting the statement into the page as text.
+        (self.statement_ahead() && self.terminator_ahead(b';')).then_some(Control::Stmt)
+    }
+
+    /// Whether the cursor is on something shaped like a Rust expression
+    /// statement rather than on prose.
+    fn statement_ahead(&self) -> bool {
+        let mut sc = self.sc.clone();
+
+        // An assignment through a dereference: `*slot = x;`.
+        while matches!(sc.peek(), Some(b'*') | Some(b'&')) {
+            sc.bump();
+            sc.skip_ws();
+        }
+
+        if sc.read_ident().is_empty() {
+            return false;
+        }
+        while sc.starts_with("::") {
+            sc.advance(2);
+            if sc.read_ident().is_empty() {
+                return false;
+            }
+        }
+        // Whether anything separates the path from what follows it. Nobody
+        // writes `buf .push(x)`, so requiring the call or field access to be
+        // flush against the path keeps prose such as "Bash (the shell); see
+        // below" from reading as a function call.
+        let before = sc.offset();
+        sc.skip_ws();
+        let spaced = sc.offset() != before;
+
+        // What follows a path in a statement, but not in a sentence.
+        const COMPOUND: &[&str] = &["+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="];
+        if COMPOUND.iter().any(|op| sc.starts_with(op)) {
+            return true;
+        }
+        match sc.peek() {
+            // `=` alone is an assignment; `==` is a comparison, which is not a
+            // statement anybody means to write.
+            Some(b'=') => sc.peek_at(1) != Some(b'='),
+            Some(b'.') | Some(b'(') | Some(b'[') | Some(b'!') | Some(b'?') => !spaced,
+            _ => false,
+        }
     }
 
     /// Scans ahead for `terminator` at nesting depth zero, giving up at the
@@ -1344,6 +1420,117 @@ impl<'a> Parser<'a> {
 
         self.sc.slice(start, self.sc.offset()).to_string()
     }
+}
+
+/// Extracts the names a chunk of Rust brings into scope.
+///
+/// Only `use` declarations matter, and only enough of them to resolve a
+/// component name to the file that declares it. Anything this does not
+/// understand simply yields no names, which costs a cross-file check rather
+/// than producing a wrong one.
+fn parse_use_decls(source: &str, span: Span) -> Vec<UseDecl> {
+    let mut out = Vec::new();
+    for statement in source.split(';') {
+        let statement = strip_comments(statement);
+        let trimmed = statement.trim();
+        let Some(rest) = trimmed.strip_prefix("use ") else {
+            continue;
+        };
+        // `pub use` re-exports a name without bringing it into scope here, but
+        // treating it as an import is harmless and often what was meant.
+        let rest = rest.trim();
+        collect_use_tree(rest, &[], span, &mut out);
+    }
+    out
+}
+
+/// Walks one `use` tree, which may branch at a `{…}` group.
+fn collect_use_tree(path: &str, prefix: &[String], span: Span, out: &mut Vec<UseDecl>) {
+    let path = path.trim();
+    if path.is_empty() {
+        return;
+    }
+
+    if let Some(open) = path.find('{') {
+        let Some(close) = path.rfind('}') else {
+            return;
+        };
+        let head = path[..open].trim().trim_end_matches("::");
+        let mut nested = prefix.to_vec();
+        nested.extend(split_path(head));
+        for branch in split_top_level_commas(&path[open + 1..close]) {
+            collect_use_tree(&branch, &nested, span, out);
+        }
+        return;
+    }
+
+    let mut segments = prefix.to_vec();
+    segments.extend(split_path(path));
+    let Some(last) = segments.pop() else {
+        return;
+    };
+
+    // `self` inside a group means the group's own module: `a::{self, B}`.
+    let (name, module) = if last == "self" {
+        match segments.last() {
+            Some(name) => (name.clone(), segments.clone()),
+            None => return,
+        }
+    } else if let Some((name, alias)) = last.split_once(" as ") {
+        let _ = name;
+        (alias.trim().to_string(), segments.clone())
+    } else {
+        (last, segments.clone())
+    };
+
+    let module = module
+        .into_iter()
+        .filter(|segment| segment != "crate" && segment != "self")
+        .collect();
+
+    out.push(UseDecl { span, name, module });
+}
+
+fn split_path(path: &str) -> Vec<String> {
+    path.split("::")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Splits a `use` group on commas that are not inside a nested group.
+fn split_top_level_commas(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut current = String::new();
+    for ch in s.chars() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(std::mem::take(&mut current));
+                continue;
+            }
+            _ => {}
+        }
+        current.push(ch);
+    }
+    if !current.trim().is_empty() {
+        parts.push(current);
+    }
+    parts
+}
+
+/// Removes line comments, so a commented-out `use` is not indexed.
+fn strip_comments(s: &str) -> String {
+    s.lines()
+        .map(|line| match line.find("//") {
+            Some(i) => &line[..i],
+            None => line,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Normalises an HTML text run, returning `None` when nothing survives.

@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/rsx", "crates/rsx-core", "crates/rsx-macros", "crates/rsx-cli"]
+members = [
+    "crates/rsx",
+    "crates/rsx-core",
+    "crates/rsx-macros",
+    "crates/rsx-cli",
+    "crates/rsx-lsp",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +17,7 @@ license = "MIT"
 [workspace.dependencies]
 rsx-core = { path = "crates/rsx-core", version = "0.1.0" }
 rsx-macros = { path = "crates/rsx-macros", version = "0.1.0" }
+rsx-lsp = { path = "crates/rsx-lsp", version = "0.1.0" }
 
 [profile.bench]
 lto = true
