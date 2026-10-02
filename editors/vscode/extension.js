@@ -1,34 +1,51 @@
 const vscode = require("vscode");
-const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
+const { LanguageClient, TransportKind, State } = require("vscode-languageclient/node");
 
 let client;
 
-function activate(context) {
+async function activate(context) {
   const config = vscode.workspace.getConfiguration("rsx");
+  const serverPath = config.get("server.path", "rsx");
+
   if (!config.get("server.enabled", true)) {
-    return;
+    return { client: undefined, serverPath, started: false };
   }
 
   const serverOptions = {
-    command: config.get("server.path", "rsx"),
+    command: serverPath,
     args: ["lsp"],
     transport: TransportKind.stdio,
   };
 
   const clientOptions = {
     documentSelector: [{ scheme: "file", language: "rsx" }],
+    outputChannel: vscode.window.createOutputChannel("RSX Language Server"),
   };
 
   client = new LanguageClient("rsx", "RSX Language Server", serverOptions, clientOptions);
-  // `start` rejects when the binary is missing, which is the common first-run
-  // case; say so once instead of letting it surface as an unhandled rejection.
-  client.start().catch((error) => {
+  context.subscriptions.push(client);
+
+  let startError;
+  try {
+    await client.start();
+  } catch (error) {
+    // A missing binary is the common first-run failure; say so once rather
+    // than letting it surface as an unhandled rejection.
+    startError = error;
     vscode.window.showWarningMessage(
-      `rsx: could not start the language server (${error.message}). ` +
+      `rsx: could not start the language server at "${serverPath}" (${error.message}). ` +
         "Set rsx.server.path, or turn off rsx.server.enabled for highlighting only."
     );
-  });
-  context.subscriptions.push(client);
+  }
+
+  // Exported so a test can assert the server really came up, and report the
+  // path it tried when it did not.
+  return {
+    client,
+    serverPath,
+    started: client.state === State.Running,
+    startError,
+  };
 }
 
 function deactivate() {

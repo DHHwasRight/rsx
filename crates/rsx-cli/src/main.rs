@@ -27,6 +27,7 @@ Options:
   --out-dir <dir>   Write generated files under <dir>, mirroring the input tree
   --runtime <path>  Path to the runtime crate in generated code (default: ::rsx)
   --no-header       Omit the \"do not edit\" banner
+  --stdio           Accepted and ignored; stdio is the only lsp transport
 ";
 
 fn main() -> ExitCode {
@@ -55,6 +56,10 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
             "--runtime" => {
                 options.runtime = iter.next().ok_or("--runtime needs a path")?.clone();
             }
+            // Language clients append this to the command they spawn. There
+            // is no other transport, so it is accepted and ignored — without
+            // it, every editor fails to start the server.
+            "--stdio" => {}
             "--no-header" => options.header = false,
             "-h" | "--help" => {
                 print!("{USAGE}");

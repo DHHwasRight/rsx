@@ -7,15 +7,23 @@
   "engines": {
     "vscode": "^1.75.0"
   },
-  "categories": ["Programming Languages"],
-  "activationEvents": ["onLanguage:rsx"],
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:rsx"
+  ],
   "main": "./extension.js",
   "contributes": {
     "languages": [
       {
         "id": "rsx",
-        "extensions": [".rsx"],
-        "aliases": ["RSX"],
+        "extensions": [
+          ".rsx"
+        ],
+        "aliases": [
+          "RSX"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -46,6 +54,13 @@
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
-    "@types/vscode": "^1.75.0"
+    "@types/vscode": "^1.75.0",
+    "@vscode/test-electron": "^3.1.0",
+    "glob": "^13.0.6",
+    "mocha": "^12.0.3"
+  },
+  "scripts": {
+    "test": "node ./test/runTest.js",
+    "package": "vsce package"
   }
 }

@@ -1,2 +1,6 @@
 /target
 **/*.rs.bk
+editors/vscode/node_modules/
+editors/vscode/.vscode-test/
+editors/vscode/*.vsix
+editors/vscode/test/fixtures/.vscode/
