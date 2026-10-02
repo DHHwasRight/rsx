@@ -122,6 +122,11 @@ impl RustBridge {
     /// A failure to start is remembered, so an editor without
     /// `rust-analyzer` installed does not retry a spawn on every keystroke.
     fn analyzer_for(&mut self, path: &Path) -> Option<&mut RustAnalyzer> {
+        // The crate holding the host file, not the workspace above it. A
+        // crate can be excluded from the workspace it sits inside, and
+        // starting the analyzer at that workspace would leave the file in no
+        // project at all. Given the crate's own manifest, rust-analyzer finds
+        // whatever workspace does contain it.
         let root = bridge::crate_root(path)?;
 
         let index = match self.analyzers.iter().position(|(r, _)| *r == root) {

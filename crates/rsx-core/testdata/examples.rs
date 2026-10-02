@@ -30,6 +30,7 @@ pub struct Post {
 // ---------------------------------------------------------------
 // Basic HTML and text output
 // ---------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn greeting(__w: &mut ::rsx::Writer<'_>, name: &str) -> ::rsx::Result {
     __w.raw("<div class=\"greeting\"><h1>Hello, ")?;
@@ -51,12 +52,14 @@ impl<'__rsx_a0> ::rsx::Template for Greeting<'__rsx_a0> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn Greeting<'__rsx_a0>(name: &'__rsx_a0 str) -> Greeting<'__rsx_a0> {
     Greeting { name }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn divider(__w: &mut ::rsx::Writer<'_>) -> ::rsx::Result {
     __w.raw("<hr>")?;
@@ -74,6 +77,7 @@ impl ::rsx::Template for Divider {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn Divider() -> Divider {
@@ -83,6 +87,7 @@ pub fn Divider() -> Divider {
 // ---------------------------------------------------------------
 // Parameters: owned, borrowed, optional
 // ---------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn user_bio(__w: &mut ::rsx::Writer<'_>, user: &User) -> ::rsx::Result {
     __w.raw("<div class=\"user-bio\"><h2>")?;
@@ -120,6 +125,7 @@ impl<'__rsx_a0> ::rsx::Template for UserBio<'__rsx_a0> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn UserBio<'__rsx_a0>(user: &'__rsx_a0 User) -> UserBio<'__rsx_a0> {
@@ -129,6 +135,7 @@ pub fn UserBio<'__rsx_a0>(user: &'__rsx_a0 User) -> UserBio<'__rsx_a0> {
 // ---------------------------------------------------------------
 // Attributes: static, expression, bare, conditional
 // ---------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn search_form(__w: &mut ::rsx::Writer<'_>, action: &str, query: &str, autofocus: bool) -> ::rsx::Result {
     __w.raw("<form action=\"")?;
@@ -156,6 +163,7 @@ impl<'__rsx_a0, '__rsx_a1> ::rsx::Template for SearchForm<'__rsx_a0, '__rsx_a1> 
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn SearchForm<'__rsx_a0, '__rsx_a1>(action: &'__rsx_a0 str, query: &'__rsx_a1 str, autofocus: bool) -> SearchForm<'__rsx_a0, '__rsx_a1> {
@@ -165,6 +173,7 @@ pub fn SearchForm<'__rsx_a0, '__rsx_a1>(action: &'__rsx_a0 str, query: &'__rsx_a
 // ---------------------------------------------------------------
 // Void and self-closing elements
 // ---------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn media_embed(__w: &mut ::rsx::Writer<'_>, src: &str, poster: &str) -> ::rsx::Result {
     __w.raw("<div class=\"media\"><img src=\"")?;
@@ -193,6 +202,7 @@ impl<'__rsx_a0, '__rsx_a1> ::rsx::Template for MediaEmbed<'__rsx_a0, '__rsx_a1> 
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn MediaEmbed<'__rsx_a0, '__rsx_a1>(src: &'__rsx_a0 str, poster: &'__rsx_a1 str) -> MediaEmbed<'__rsx_a0, '__rsx_a1> {
@@ -202,6 +212,7 @@ pub fn MediaEmbed<'__rsx_a0, '__rsx_a1>(src: &'__rsx_a0 str, poster: &'__rsx_a1 
 // ---------------------------------------------------------------
 // Control flow: if / else if / else
 // ---------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn role_badge(__w: &mut ::rsx::Writer<'_>, role: &str) -> ::rsx::Result {
     if role == "admin" {
@@ -229,12 +240,14 @@ impl<'__rsx_a0> ::rsx::Template for RoleBadge<'__rsx_a0> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn RoleBadge<'__rsx_a0>(role: &'__rsx_a0 str) -> RoleBadge<'__rsx_a0> {
     RoleBadge { role }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn maybe_alert(__w: &mut ::rsx::Writer<'_>, show: bool, message: &str) -> ::rsx::Result {
     if show {
@@ -259,12 +272,14 @@ impl<'__rsx_a0> ::rsx::Template for MaybeAlert<'__rsx_a0> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn MaybeAlert<'__rsx_a0>(show: bool, message: &'__rsx_a0 str) -> MaybeAlert<'__rsx_a0> {
     MaybeAlert { show, message }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn collapsible_section<__RsxChildren0: ::rsx::Template>(__w: &mut ::rsx::Writer<'_>, collapsed: bool, title: &str, children: __RsxChildren0) -> ::rsx::Result {
     __w.raw("<div class=\"section\"><h3>")?;
@@ -294,6 +309,7 @@ impl<'__rsx_a0, __RsxChildren0: ::rsx::Template> ::rsx::Template for Collapsible
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn CollapsibleSection<'__rsx_a0, __RsxChildren0: ::rsx::Template>(collapsed: bool, title: &'__rsx_a0 str, children: __RsxChildren0) -> CollapsibleSection<'__rsx_a0, __RsxChildren0> {
@@ -303,6 +319,7 @@ pub fn CollapsibleSection<'__rsx_a0, __RsxChildren0: ::rsx::Template>(collapsed:
 // ---------------------------------------------------------------
 // Control flow: match
 // ---------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn status_icon(__w: &mut ::rsx::Writer<'_>, status: &str) -> ::rsx::Result {
     match status {
@@ -335,12 +352,14 @@ impl<'__rsx_a0> ::rsx::Template for StatusIcon<'__rsx_a0> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn StatusIcon<'__rsx_a0>(status: &'__rsx_a0 str) -> StatusIcon<'__rsx_a0> {
     StatusIcon { status }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn priority_label(__w: &mut ::rsx::Writer<'_>, level: u8) -> ::rsx::Result {
     match level {
@@ -372,6 +391,7 @@ impl ::rsx::Template for PriorityLabel {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn PriorityLabel(level: u8) -> PriorityLabel {
@@ -381,6 +401,7 @@ pub fn PriorityLabel(level: u8) -> PriorityLabel {
 // ---------------------------------------------------------------
 // Iteration
 // ---------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn tag_list(__w: &mut ::rsx::Writer<'_>, tags: &[String]) -> ::rsx::Result {
     __w.raw("<ul class=\"tags\">")?;
@@ -406,12 +427,14 @@ impl<'__rsx_a0> ::rsx::Template for TagList<'__rsx_a0> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn TagList<'__rsx_a0>(tags: &'__rsx_a0 [String]) -> TagList<'__rsx_a0> {
     TagList { tags }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn numbered_list(__w: &mut ::rsx::Writer<'_>, items: &[String]) -> ::rsx::Result {
     __w.raw("<ol>")?;
@@ -439,12 +462,14 @@ impl<'__rsx_a0> ::rsx::Template for NumberedList<'__rsx_a0> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn NumberedList<'__rsx_a0>(items: &'__rsx_a0 [String]) -> NumberedList<'__rsx_a0> {
     NumberedList { items }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn comment_thread(__w: &mut ::rsx::Writer<'_>, post: &Post) -> ::rsx::Result {
     __w.raw("<div class=\"comments\">")?;
@@ -472,12 +497,14 @@ impl<'__rsx_a0> ::rsx::Template for CommentThread<'__rsx_a0> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn CommentThread<'__rsx_a0>(post: &'__rsx_a0 Post) -> CommentThread<'__rsx_a0> {
     CommentThread { post }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn filtered_list(__w: &mut ::rsx::Writer<'_>, items: &[String], show_empty: bool) -> ::rsx::Result {
     __w.raw("<ul>")?;
@@ -509,6 +536,7 @@ impl<'__rsx_a0> ::rsx::Template for FilteredList<'__rsx_a0> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn FilteredList<'__rsx_a0>(items: &'__rsx_a0 [String], show_empty: bool) -> FilteredList<'__rsx_a0> {
@@ -518,6 +546,7 @@ pub fn FilteredList<'__rsx_a0>(items: &'__rsx_a0 [String], show_empty: bool) -> 
 // ---------------------------------------------------------------
 // Fragments
 // ---------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn page_meta(__w: &mut ::rsx::Writer<'_>, title: &str, description: &str) -> ::rsx::Result {
     __w.raw("<meta name=\"title\" content=\"")?;
@@ -544,6 +573,7 @@ impl<'__rsx_a0, '__rsx_a1> ::rsx::Template for PageMeta<'__rsx_a0, '__rsx_a1> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn PageMeta<'__rsx_a0, '__rsx_a1>(title: &'__rsx_a0 str, description: &'__rsx_a1 str) -> PageMeta<'__rsx_a0, '__rsx_a1> {
@@ -553,6 +583,7 @@ pub fn PageMeta<'__rsx_a0, '__rsx_a1>(title: &'__rsx_a0 str, description: &'__rs
 // ---------------------------------------------------------------
 // Raw output
 // ---------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn rich_content(__w: &mut ::rsx::Writer<'_>, html: &str) -> ::rsx::Result {
     __w.raw("<div class=\"prose\">")?;
@@ -574,12 +605,14 @@ impl<'__rsx_a0> ::rsx::Template for RichContent<'__rsx_a0> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn RichContent<'__rsx_a0>(html: &'__rsx_a0 str) -> RichContent<'__rsx_a0> {
     RichContent { html }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn inline_code(__w: &mut ::rsx::Writer<'_>, code: &str, lang: &str) -> ::rsx::Result {
     __w.raw("<pre class=\"highlight\"><code class=\"")?;
@@ -604,6 +637,7 @@ impl<'__rsx_a0, '__rsx_a1> ::rsx::Template for InlineCode<'__rsx_a0, '__rsx_a1> 
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn InlineCode<'__rsx_a0, '__rsx_a1>(code: &'__rsx_a0 str, lang: &'__rsx_a1 str) -> InlineCode<'__rsx_a0, '__rsx_a1> {
@@ -613,6 +647,7 @@ pub fn InlineCode<'__rsx_a0, '__rsx_a1>(code: &'__rsx_a0 str, lang: &'__rsx_a1 s
 // ---------------------------------------------------------------
 // Spread attributes
 // ---------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn button(__w: &mut ::rsx::Writer<'_>, label: &str, attrs: &BTreeMap<String, String>) -> ::rsx::Result {
     __w.raw("<button class=\"btn\"")?;
@@ -637,12 +672,14 @@ impl<'__rsx_a0, '__rsx_a1> ::rsx::Template for Button<'__rsx_a0, '__rsx_a1> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn Button<'__rsx_a0, '__rsx_a1>(label: &'__rsx_a0 str, attrs: &'__rsx_a1 BTreeMap<String, String>) -> Button<'__rsx_a0, '__rsx_a1> {
     Button { label, attrs }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn input(__w: &mut ::rsx::Writer<'_>, base_class: &str, extra: &BTreeMap<String, String>) -> ::rsx::Result {
     __w.raw("<input class=\"")?;
@@ -667,6 +704,7 @@ impl<'__rsx_a0, '__rsx_a1> ::rsx::Template for Input<'__rsx_a0, '__rsx_a1> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn Input<'__rsx_a0, '__rsx_a1>(base_class: &'__rsx_a0 str, extra: &'__rsx_a1 BTreeMap<String, String>) -> Input<'__rsx_a0, '__rsx_a1> {
@@ -676,6 +714,7 @@ pub fn Input<'__rsx_a0, '__rsx_a1>(base_class: &'__rsx_a0 str, extra: &'__rsx_a1
 // ---------------------------------------------------------------
 // Composition
 // ---------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn card<__RsxChildren0: ::rsx::Template>(__w: &mut ::rsx::Writer<'_>, title: &str, subtitle: &str, children: __RsxChildren0) -> ::rsx::Result {
     __w.raw("<div class=\"card\"><div class=\"card-header\"><h3>")?;
@@ -707,12 +746,14 @@ impl<'__rsx_a0, '__rsx_a1, __RsxChildren0: ::rsx::Template> ::rsx::Template for 
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn Card<'__rsx_a0, '__rsx_a1, __RsxChildren0: ::rsx::Template>(title: &'__rsx_a0 str, subtitle: &'__rsx_a1 str, children: __RsxChildren0) -> Card<'__rsx_a0, '__rsx_a1, __RsxChildren0> {
     Card { title, subtitle, children }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn alert<__RsxChildren0: ::rsx::Template>(__w: &mut ::rsx::Writer<'_>, kind: &str, children: __RsxChildren0) -> ::rsx::Result {
     __w.raw("<div class=\"")?;
@@ -737,12 +778,14 @@ impl<'__rsx_a0, __RsxChildren0: ::rsx::Template> ::rsx::Template for Alert<'__rs
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn Alert<'__rsx_a0, __RsxChildren0: ::rsx::Template>(kind: &'__rsx_a0 str, children: __RsxChildren0) -> Alert<'__rsx_a0, __RsxChildren0> {
     Alert { kind, children }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn dashboard(__w: &mut ::rsx::Writer<'_>, user_name: &str, notifications: &[String]) -> ::rsx::Result {
     __w.raw("<div class=\"dashboard\">")?;
@@ -758,7 +801,7 @@ pub fn dashboard(__w: &mut ::rsx::Writer<'_>, user_name: &str, notifications: &[
             }
             Ok(())
         });
-        ::rsx::Template::render(Card { title: "Welcome", subtitle: format!("Hello, {user_name}"), children: __rsx_children }, __w)?;
+        ::rsx::Template::render(Card { title: "Welcome", subtitle: &format!("Hello, {user_name}"), children: __rsx_children }, __w)?;
     }
     {
         let __rsx_children = ::rsx::from_fn(|__w| {
@@ -795,6 +838,7 @@ impl<'__rsx_a0, '__rsx_a1> ::rsx::Template for Dashboard<'__rsx_a0, '__rsx_a1> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn Dashboard<'__rsx_a0, '__rsx_a1>(user_name: &'__rsx_a0 str, notifications: &'__rsx_a1 [String]) -> Dashboard<'__rsx_a0, '__rsx_a1> {
@@ -804,6 +848,7 @@ pub fn Dashboard<'__rsx_a0, '__rsx_a1>(user_name: &'__rsx_a0 str, notifications:
 // ---------------------------------------------------------------
 // Full page layout
 // ---------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn html_layout<__RsxChildren0: ::rsx::Template>(__w: &mut ::rsx::Writer<'_>, title: &str, lang: &str, children: __RsxChildren0) -> ::rsx::Result {
     __w.raw("<!DOCTYPE html><html lang=\"")?;
@@ -831,12 +876,14 @@ impl<'__rsx_a0, '__rsx_a1, __RsxChildren0: ::rsx::Template> ::rsx::Template for 
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn HtmlLayout<'__rsx_a0, '__rsx_a1, __RsxChildren0: ::rsx::Template>(title: &'__rsx_a0 str, lang: &'__rsx_a1 str, children: __RsxChildren0) -> HtmlLayout<'__rsx_a0, '__rsx_a1, __RsxChildren0> {
     HtmlLayout { title, lang, children }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn nav(__w: &mut ::rsx::Writer<'_>, links: &[String]) -> ::rsx::Result {
     __w.raw("<nav><ul>")?;
@@ -864,12 +911,14 @@ impl<'__rsx_a0> ::rsx::Template for Nav<'__rsx_a0> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn Nav<'__rsx_a0>(links: &'__rsx_a0 [String]) -> Nav<'__rsx_a0> {
     Nav { links }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn copyright(__w: &mut ::rsx::Writer<'_>, year: u32) -> ::rsx::Result {
     __w.raw("<footer><p>Copyright ")?;
@@ -891,6 +940,7 @@ impl ::rsx::Template for Copyright {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn Copyright(year: u32) -> Copyright {
@@ -900,6 +950,7 @@ pub fn Copyright(year: u32) -> Copyright {
 // ---------------------------------------------------------------
 // A component combining many features at once
 // ---------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn blog_post(__w: &mut ::rsx::Writer<'_>, title: &str, author: &str, body_html: &str, tags: &[String], status: &str, featured: bool, comments: &[String]) -> ::rsx::Result {
     __w.raw("<article class=\"post\">")?;
@@ -955,6 +1006,7 @@ impl<'__rsx_a0, '__rsx_a1, '__rsx_a2, '__rsx_a3, '__rsx_a4, '__rsx_a5> ::rsx::Te
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn BlogPost<'__rsx_a0, '__rsx_a1, '__rsx_a2, '__rsx_a3, '__rsx_a4, '__rsx_a5>(title: &'__rsx_a0 str, author: &'__rsx_a1 str, body_html: &'__rsx_a2 str, tags: &'__rsx_a3 [String], status: &'__rsx_a4 str, featured: bool, comments: &'__rsx_a5 [String]) -> BlogPost<'__rsx_a0, '__rsx_a1, '__rsx_a2, '__rsx_a3, '__rsx_a4, '__rsx_a5> {

@@ -341,6 +341,11 @@ impl Generator<'_, '_> {
         // ---- the writer function
         let fn_generics = generics.fn_decl();
         let vis = vis_prefix(&c.vis);
+        // A component with many parameters generates a function with many
+        // arguments. That is a property of the template, not a style choice
+        // anyone can act on from here, so the lint is silenced rather than
+        // reported against code nobody wrote.
+        self.line("#[allow(clippy::too_many_arguments)]");
         self.line("#[inline]");
 
         // Built from parts so each parameter type keeps its link back to the
@@ -421,6 +426,7 @@ impl Generator<'_, '_> {
             .collect::<Vec<_>>()
             .join(", ");
         self.line("#[allow(non_snake_case)]");
+        self.line("#[allow(clippy::too_many_arguments)]");
         // The constructor is a convenience alternative to the struct literal,
         // so a component that only ever gets built one way should not warn.
         self.line("#[allow(dead_code)]");

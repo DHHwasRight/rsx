@@ -248,7 +248,7 @@ pub fn Alert(kind: &str, children: Element) -> Element {
 
 pub fn Dashboard(user_name: &str, notifications: &[String]) -> Element {
     <div class="dashboard">
-        <Card title="Welcome" subtitle={format!("Hello, {user_name}")}>
+        <Card title="Welcome" subtitle={&format!("Hello, {user_name}")}>
             <p>Your dashboard is ready.</p>
             <Alert kind="success">
                 <strong>All systems operational.</strong>

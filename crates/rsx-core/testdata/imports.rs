@@ -5,6 +5,7 @@ use super::shared::button::Button;
 
 use super::shared::card::Card;
 
+#[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn home(__w: &mut ::rsx::Writer<'_>, title: &str) -> ::rsx::Result {
     __w.raw("<div class=\"page\">")?;
@@ -27,6 +28,7 @@ impl<'__rsx_a0> ::rsx::Template for Home<'__rsx_a0> {
 }
 
 #[allow(non_snake_case)]
+#[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 #[inline]
 pub fn Home<'__rsx_a0>(title: &'__rsx_a0 str) -> Home<'__rsx_a0> {

@@ -56,8 +56,24 @@ pub fn crate_root(path: &Path) -> Option<PathBuf> {
 }
 
 /// Builds the host for `template`, or `None` when its code reaches no crate.
+///
+/// The macro is tried first. A generated `.rs` sitting beside a template is
+/// not proof that anything compiles it — a golden fixture looks exactly like
+/// output that is `mod`-ed in — whereas a macro invocation naming the
+/// template is proof, because the invocation is itself inside a crate.
 pub fn resolve(template: &Path, options: &Options) -> Option<Host> {
-    sibling_host(template, options).or_else(|| macro_host(template, options))
+    macro_host(template, options).or_else(|| sibling_host(template, options))
+}
+
+/// The outermost `Cargo.toml` above `path` that declares a workspace.
+pub fn workspace_root(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .skip(1)
+        .find(|dir| {
+            fs::read_to_string(dir.join("Cargo.toml"))
+                .is_ok_and(|manifest| manifest.contains("[workspace]"))
+        })
+        .map(Path::to_path_buf)
 }
 
 /// `rsx generate` mode: the generated file sits beside the template.
@@ -152,14 +168,35 @@ struct Invocation {
     range: (usize, usize),
 }
 
-/// Searches the crate for the macro call that compiles `template`.
+/// Searches for the macro call that compiles `template`.
+///
+/// The call need not be in the same crate, let alone in its `src`: a
+/// workspace commonly keeps templates in one crate and loads them from a test
+/// or an example in another. The crate is searched first, since that is where
+/// it usually is, and the workspace only if that comes up empty.
 fn find_invocation(root: &Path, template: &Path) -> Option<(PathBuf, Invocation)> {
+    if let Some(found) = search_for_invocation(root, template) {
+        return Some(found);
+    }
+    let workspace = workspace_root(template)?;
+    if workspace == root {
+        return None;
+    }
+    search_for_invocation(&workspace, template)
+}
+
+fn search_for_invocation(root: &Path, template: &Path) -> Option<(PathBuf, Invocation)> {
     let template = canonical(template);
-    for candidate in rust_files(&root.join("src")) {
+    for candidate in rust_files(root) {
         let Ok(source) = fs::read_to_string(&candidate) else {
             continue;
         };
-        for invocation in invocations(&source, root) {
+        // Macro paths are relative to the manifest of the crate holding the
+        // invocation, which is not necessarily the one being searched.
+        let Some(manifest_dir) = crate_root(&candidate) else {
+            continue;
+        };
+        for invocation in invocations(&source, &manifest_dir) {
             let covers = match invocation.kind {
                 InvocationKind::File => canonical(&invocation.target) == template,
                 InvocationKind::Dir => template.starts_with(canonical(&invocation.target)),
@@ -229,6 +266,9 @@ fn rust_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// Directories inside a crate that can hold a macro invocation.
+const SOURCE_DIRS: &[&str] = &["src", "tests", "examples", "benches"];
+
 fn collect_rust(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
     // A crate's module tree is not deep, and this runs on every template
     // change; a bound keeps a stray symlink from costing a scan of the disk.
@@ -242,15 +282,30 @@ fn collect_rust(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.starts_with('.') || name == "target" {
+        if name.starts_with('.') || name == "target" || name == "node_modules" {
             continue;
         }
         if path.is_dir() {
+            // At the top of a crate only the directories that can hold code
+            // are worth descending into; deeper down, everything is.
+            if depth == 0 && !SOURCE_DIRS.contains(&name.as_ref()) && !is_crate_dir(&path) {
+                continue;
+            }
             collect_rust(&path, out, depth + 1);
         } else if path.extension().is_some_and(|e| e == "rs") {
             out.push(path);
         }
     }
+}
+
+/// Whether a directory holds a crate, or crates beneath it.
+fn is_crate_dir(path: &Path) -> bool {
+    path.join("Cargo.toml").is_file()
+        || fs::read_dir(path).is_ok_and(|entries| {
+            entries
+                .flatten()
+                .any(|entry| entry.path().join("Cargo.toml").is_file())
+        })
 }
 
 #[cfg(test)]
