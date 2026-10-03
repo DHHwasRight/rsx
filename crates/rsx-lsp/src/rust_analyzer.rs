@@ -146,6 +146,8 @@ pub struct RustAnalyzer {
     /// Whether the crate has been indexed. Answers before that are empty,
     /// which is indistinguishable from "nothing to suggest".
     primed: bool,
+    /// Whether the priming cycle under way has reported any progress.
+    priming_reported: bool,
 }
 
 impl RustAnalyzer {
@@ -158,6 +160,7 @@ impl RustAnalyzer {
             timeout: Duration::from_secs(10),
             ready: false,
             primed: false,
+            priming_reported: false,
         }
     }
 
@@ -208,6 +211,25 @@ impl RustAnalyzer {
         false
     }
 
+    /// Waits briefly to see whether the server is still working.
+    ///
+    /// Returns true if anything arrived, which means an answer just given may
+    /// have been premature and is worth asking for again.
+    pub fn progressed(&mut self, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        while Instant::now() < deadline {
+            match self.transport.receive(Duration::from_millis(50)) {
+                Ok(Some(message)) => {
+                    self.note(&message);
+                    return true;
+                }
+                Ok(None) => continue,
+                Err(_) => return false,
+            }
+        }
+        false
+    }
+
     /// Watches a message for the signal that indexing has finished.
     fn note(&mut self, message: &Value) {
         if message.get("method").and_then(Value::as_str) != Some("$/progress") {
@@ -222,9 +244,20 @@ impl RustAnalyzer {
             .and_then(|v| v.get("kind"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        // `cachePriming` ending is the last thing before answers are real.
-        if kind == "end" && token.contains("cachePriming") {
-            self.primed = true;
+        // `rust-analyzer` runs two priming cycles: a trivial one before the
+        // crate graph exists, which ends almost at once, and the real one
+        // after. Only the real one reports progress, so a cycle that reported
+        // nothing is not readiness — treating it as such means asking while
+        // the index is empty and being told, indistinguishably, that there is
+        // nothing to suggest.
+        if !token.contains("cachePriming") {
+            return;
+        }
+        match kind {
+            "begin" => self.priming_reported = false,
+            "report" => self.priming_reported = true,
+            "end" if self.priming_reported => self.primed = true,
+            _ => {}
         }
     }
 
@@ -289,6 +322,17 @@ impl RustAnalyzer {
                 "textDocument": { "uri": path_to_uri(path) },
                 "position": { "line": line, "character": character },
                 "context": { "triggerKind": 1 },
+            }),
+        )
+    }
+
+    /// Asks where the thing at a position is defined.
+    pub fn definition(&mut self, path: &Path, line: u32, character: u32) -> io::Result<Value> {
+        self.request(
+            "textDocument/definition",
+            json!({
+                "textDocument": { "uri": path_to_uri(path) },
+                "position": { "line": line, "character": character },
             }),
         )
     }

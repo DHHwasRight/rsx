@@ -8,10 +8,12 @@
 use std::collections::VecDeque;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use rsx_lsp::rust::{RustBridge, Settings};
 use rsx_lsp::rust_analyzer::{RustAnalyzer, Transport};
 
 /// A peer that replies from a script instead of thinking.
@@ -150,7 +152,13 @@ fn priming_completes_when_indexing_ends() {
         Scripted::new()
             .queue(progress("rustAnalyzer/Fetching", "begin"))
             .queue(progress("rustAnalyzer/Fetching", "end"))
+            // The trivial cycle before the crate graph exists: no reports,
+            // and ending it is not readiness.
             .queue(progress("rustAnalyzer/cachePriming", "begin"))
+            .queue(progress("rustAnalyzer/cachePriming", "end"))
+            // The real one.
+            .queue(progress("rustAnalyzer/cachePriming", "begin"))
+            .queue(progress("rustAnalyzer/cachePriming", "report"))
             .queue(progress("rustAnalyzer/cachePriming", "end")),
     );
     let mut analyzer = RustAnalyzer::new(Box::new(shared)).with_timeout(Duration::from_secs(2));
@@ -214,6 +222,27 @@ fn rust_analyzer_available() -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
+/// The crate the tests that use a real `rust-analyzer` share.
+///
+/// One crate, built once, and the tests that need it run one at a time. Each
+/// of them otherwise cold-starts its own analyzer on its own crate, and
+/// several of those racing each other is slow and intermittently fails.
+fn live_fixture() -> &'static (PathBuf, Mutex<RustBridge>) {
+    static LIVE: OnceLock<(PathBuf, Mutex<RustBridge>)> = OnceLock::new();
+    LIVE.get_or_init(|| {
+        (
+            fixture_crate("rsx-bridge-live"),
+            Mutex::new(RustBridge::new(Settings {
+                // A cold `rust-analyzer` has to run cargo, and these tests
+                // run while cargo is already busy building the rest of the
+                // suite, so give it room.
+                timeout: Duration::from_secs(120),
+                ..Default::default()
+            })),
+        )
+    })
+}
+
 /// Writes a crate that uses `load_dir!`, the way a real project would.
 fn fixture_crate(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(name);
@@ -259,7 +288,8 @@ fn dot_completion_in_a_template_comes_from_rust_analyzer() {
         return;
     }
 
-    let dir = fixture_crate("rsx-bridge-test");
+    let (dir, shared) = live_fixture();
+    let mut bridge = shared.lock().unwrap_or_else(|e| e.into_inner());
     let template = dir.join("src/views/card.rsx");
     let source = std::fs::read_to_string(&template).unwrap();
 
@@ -270,11 +300,6 @@ fn dot_completion_in_a_template_comes_from_rust_analyzer() {
     let uri = format!("file://{}", template.display());
     store.open(&uri, &source, 1);
     let document = store.get(&uri).unwrap();
-
-    let mut bridge = rsx_lsp::rust::RustBridge::new(rsx_lsp::rust::Settings {
-        timeout: Duration::from_secs(90),
-        ..Default::default()
-    });
 
     let overlay = store.overlay();
     assert!(
@@ -292,9 +317,6 @@ fn dot_completion_in_a_template_comes_from_rust_analyzer() {
 
     let name = items.iter().find(|i| i.label == "name").unwrap();
     assert_eq!(name.detail.as_deref(), Some("String"));
-
-    bridge.shutdown();
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -406,4 +428,74 @@ fn a_host_is_reused_until_the_text_changes() {
     assert_ne!(first.text, third.text, "the cache outlived the text");
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn go_to_definition_on_a_type_lands_in_the_template() {
+    // A type the template itself declares is passed through into the
+    // generated code verbatim, so the definition `rust-analyzer` finds is in
+    // the host file — and has to be translated back, or the editor opens a
+    // file the author never wrote.
+    if !rust_analyzer_available() {
+        eprintln!("skipping: rust-analyzer is not installed");
+        return;
+    }
+
+    let (dir, shared) = live_fixture();
+    let mut bridge = shared.lock().unwrap_or_else(|e| e.into_inner());
+    let template = dir.join("src/views/card.rsx");
+    let source = std::fs::read_to_string(&template).unwrap();
+
+    let mut store = rsx_lsp::DocumentStore::new();
+    let uri = format!("file://{}", template.display());
+    store.open(&uri, &source, 1);
+    let document = store.get(&uri).unwrap();
+
+    // The `User` written in `fn Card(user: &User)`.
+    let offset = source.find("&User").unwrap() + 1;
+    let found = bridge
+        .definition(document, offset, &store.overlay())
+        .expect("no definition came back");
+
+    assert_eq!(found.uri, uri, "should point into the template");
+    let line = source.lines().nth(found.range.start.line as usize).unwrap();
+    assert!(
+        line.contains("struct User"),
+        "landed on {line:?} instead of the declaration"
+    );
+}
+
+#[test]
+fn a_definition_in_another_file_is_passed_through() {
+    let dir = fixture_crate("rsx-bridge-definition-extern");
+    let template = dir.join("src/views/card.rsx");
+    let source = std::fs::read_to_string(&template).unwrap();
+    let mut store = rsx_lsp::DocumentStore::new();
+    let uri = format!("file://{}", template.display());
+    store.open(&uri, &source, 1);
+
+    // Markup is not Rust, so nothing is asked and nothing comes back.
+    let mut bridge = rsx_lsp::rust::RustBridge::new(Default::default());
+    let offset = source.find("<div").unwrap();
+    assert!(bridge
+        .definition(store.get(&uri).unwrap(), offset, &store.overlay())
+        .is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_priming_cycle_that_reported_nothing_is_not_readiness() {
+    // `rust-analyzer` ends a trivial priming cycle before the crate graph
+    // exists. Taking that as readiness means asking while the index is empty
+    // and being told, indistinguishably, that there is nothing to suggest.
+    let shared = Shared::new(
+        Scripted::new()
+            .queue(progress("rustAnalyzer/cachePriming", "begin"))
+            .queue(progress("rustAnalyzer/cachePriming", "end")),
+    );
+    let mut analyzer = RustAnalyzer::new(Box::new(shared)).with_timeout(Duration::from_millis(300));
+
+    assert!(!analyzer.wait_until_primed());
+    assert!(!analyzer.is_primed());
 }

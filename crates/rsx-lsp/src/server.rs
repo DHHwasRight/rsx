@@ -195,10 +195,24 @@ impl Server {
 
             "textDocument/definition" => {
                 let (uri, position) = location(params);
+                let Some(document) = self.store.get(&uri) else {
+                    return Outcome::Reply(Value::Null);
+                };
+
+                // A component call is a template concept, and the template
+                // knows where it is declared — in the `.rsx`, which is where
+                // the author wants to land. Everything else is Rust.
+                if let Some(found) = definition::handle(document, position, &self.store) {
+                    return Outcome::Reply(to_value(Some(found)));
+                }
+
+                let offset = document.offset(position);
+                let overlay = self.store.overlay();
                 let result = self
-                    .store
-                    .get(&uri)
-                    .and_then(|doc| definition::handle(doc, position, &self.store));
+                    .rust
+                    .is_enabled()
+                    .then(|| self.rust.definition(document, offset, &overlay))
+                    .flatten();
                 Outcome::Reply(to_value(result))
             }
 

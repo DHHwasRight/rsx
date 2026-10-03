@@ -273,3 +273,28 @@ pub fn A(user: &User, items: &[Row]) -> Element {
     }
     assert!(!map.fragments().is_empty());
 }
+
+#[test]
+fn passthrough_rust_items_are_mapped_too() {
+    // A `struct` written in a template is copied into the generated code
+    // unchanged, so a position in it has to map both ways — that is what
+    // lets "go to definition" on the type land back in the template.
+    let source = "\
+pub struct User {
+    pub name: String,
+}
+
+pub fn Card(user: &User) -> Element {
+    <p>{user.name}</p>
+}";
+    let (code, map) = compile(source);
+
+    let src = offset_of(source, "struct User");
+    let gen = map.to_generated(src).expect("the struct is not mapped");
+    assert!(
+        code[gen..].starts_with("struct User"),
+        "{:?}",
+        &code[gen..gen + 20]
+    );
+    assert_eq!(map.to_source(gen), Some(src));
+}

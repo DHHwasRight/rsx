@@ -15,9 +15,10 @@ use rsx_core::Options;
 use crate::bridge::{self, Host};
 use crate::document::Document;
 use crate::protocol::{
-    CompletionItem, CompletionItemKind, Hover, InsertTextFormat, MarkupContent, Range, TextEdit,
+    CompletionItem, CompletionItemKind, Hover, InsertTextFormat, Location, MarkupContent, Position,
+    Range, TextEdit,
 };
-use crate::rust_analyzer::{uri_to_path, RustAnalyzer};
+use crate::rust_analyzer::{path_to_uri, uri_to_path, RustAnalyzer};
 
 /// How the bridge is configured.
 #[derive(Debug, Clone)]
@@ -128,10 +129,32 @@ impl RustBridge {
         let analyzer = self.analyzer_for(&host.path)?;
         analyzer.wait_until_primed();
         analyzer.overlay(&host.path, &host.text).ok()?;
-        let result = analyzer
-            .completion(&host.path, position.0, position.1)
-            .ok()?;
+        let result = ask_until_settled(
+            analyzer,
+            |a| a.completion(&host.path, position.0, position.1).ok(),
+            |value| translate_completions(value, document, &host).is_empty(),
+        )?;
         Some(translate_completions(&result, document, &host))
+    }
+
+    /// Where the thing at a position inside a Rust fragment is defined.
+    pub fn definition(
+        &mut self,
+        document: &Document,
+        offset: usize,
+        overlay: &Overlay,
+    ) -> Option<Location> {
+        let (host, position) = self.locate(document, offset, overlay)?;
+        let host_path = host.path.clone();
+        let analyzer = self.analyzer_for(&host_path)?;
+        analyzer.wait_until_primed();
+        analyzer.overlay(&host_path, &host.text).ok()?;
+        let result = ask_until_settled(
+            analyzer,
+            |a| a.definition(&host_path, position.0, position.1).ok(),
+            |value| translate_definition(value, document, &host).is_none(),
+        )?;
+        translate_definition(&result, document, &host)
     }
 
     /// Hover for a position inside a Rust fragment.
@@ -146,7 +169,11 @@ impl RustBridge {
         let analyzer = self.analyzer_for(&host_path)?;
         analyzer.wait_until_primed();
         analyzer.overlay(&host_path, &host.text).ok()?;
-        let result = analyzer.hover(&host_path, position.0, position.1).ok()?;
+        let result = ask_until_settled(
+            analyzer,
+            |a| a.hover(&host_path, position.0, position.1).ok(),
+            |value| translate_hover(value, document, &host).is_none(),
+        )?;
         translate_hover(&result, document, &host)
     }
 
@@ -201,6 +228,36 @@ impl RustBridge {
         }
         self.analyzers.clear();
     }
+}
+
+/// Asks `rust-analyzer` repeatedly while it is still working.
+///
+/// An empty answer means either "nothing to suggest" or "ask me later", and
+/// the two look identical. So an empty one is only believed once the server
+/// has gone quiet: if anything is still arriving, the question is put again.
+/// When it is genuinely idle this costs one short wait and nothing else.
+fn ask_until_settled<T>(
+    analyzer: &mut RustAnalyzer,
+    mut ask: impl FnMut(&mut RustAnalyzer) -> Option<T>,
+    is_empty: impl Fn(&T) -> bool,
+) -> Option<T> {
+    /// Long enough to catch a server mid-index, short enough not to be felt
+    /// when there is genuinely nothing to say.
+    const QUIET: Duration = Duration::from_millis(250);
+    /// A bound, so a server that never stops talking still answers.
+    const ATTEMPTS: usize = 4;
+
+    let mut answer = ask(analyzer)?;
+    for _ in 0..ATTEMPTS {
+        if !is_empty(&answer) {
+            break;
+        }
+        if !analyzer.progressed(QUIET) {
+            break;
+        }
+        answer = ask(analyzer)?;
+    }
+    Some(answer)
 }
 
 /// Converts a byte offset into a line and UTF-16 character position.
@@ -310,6 +367,57 @@ fn translate_completions(result: &Value, document: &Document, host: &Host) -> Ve
             })
         })
         .collect()
+}
+
+/// Turns `rust-analyzer`'s definition answer into one location.
+///
+/// A target in another file — a type from a dependency, or from handwritten
+/// Rust — is passed through as it stands. A target inside the host file only
+/// means something to the author if it came from the template, so it is
+/// translated home; a target in generated code has nowhere to point and is
+/// dropped rather than sending the editor into a file nobody wrote.
+fn translate_definition(result: &Value, document: &Document, host: &Host) -> Option<Location> {
+    let first = match result {
+        Value::Array(targets) => targets.first()?,
+        Value::Object(_) => result,
+        _ => return None,
+    };
+
+    // A LocationLink spells its fields differently from a Location.
+    let (uri, range) = match first.get("targetUri") {
+        Some(uri) => (
+            uri.as_str()?,
+            first
+                .get("targetSelectionRange")
+                .or_else(|| first.get("targetRange"))?,
+        ),
+        None => (first.get("uri")?.as_str()?, first.get("range")?),
+    };
+
+    let target = uri_to_path(uri)?;
+    if target != host.path {
+        return Some(Location {
+            uri: path_to_uri(&target),
+            range: protocol_range(range)?,
+        });
+    }
+
+    Some(Location {
+        uri: document.uri.clone(),
+        range: translate_range(range, document, host)?,
+    })
+}
+
+/// A range as the protocol gives it, with no translation.
+fn protocol_range(range: &Value) -> Option<Range> {
+    let point = |key: &str| -> Option<Position> {
+        let value = range.get(key)?;
+        Some(Position::new(
+            value.get("line")?.as_u64()? as u32,
+            value.get("character")?.as_u64()? as u32,
+        ))
+    };
+    Some(Range::new(point("start")?, point("end")?))
 }
 
 /// Maps a range in the host file back into the template.

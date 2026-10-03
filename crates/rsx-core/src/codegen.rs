@@ -20,7 +20,7 @@ use crate::error::{Error, Result};
 use crate::naming::{to_snake_case, SYNTH_LIFETIME_PREFIX};
 use crate::registry::{Registry, Scope};
 use crate::source_map::SourceMap;
-use crate::span::Pos;
+use crate::span::{Pos, Span};
 
 /// Code generation settings.
 #[derive(Debug, Clone)]
@@ -91,8 +91,18 @@ fn generate_in(file: &File, scope: &Scope<'_>, options: &Options) -> Result<(Str
                 // passing the original through as well would stack blank lines.
                 if !rust.source.trim().is_empty() {
                     gen.separate();
-                    let text = format!("{}\n", rust.source.trim());
-                    gen.emit(&text);
+                    let trimmed = rust.source.trim();
+                    // Recorded as a fragment because it is copied verbatim.
+                    // That is what lets "go to definition" on a type the
+                    // template itself declares land back in the template,
+                    // rather than in generated code the author never wrote.
+                    let lead = rust.source.len() - rust.source.trim_start().len();
+                    let from = Pos {
+                        offset: rust.span.from.offset + lead,
+                        ..rust.span.from
+                    };
+                    gen.emit_mapped(trimmed, Span::new(from, from));
+                    gen.emit("\n");
                 }
             }
             Item::Component(component) => {
@@ -198,6 +208,14 @@ impl Generator<'_, '_> {
 
     fn line(&mut self, s: &str) {
         self.line_parts(&[Part::lit(s)]);
+    }
+
+    /// Appends text that was copied verbatim from `source`, recording where
+    /// it landed so a position in it can be translated either way.
+    fn emit_mapped(&mut self, text: &str, source: Span) {
+        let at = self.out.len();
+        self.emit(text);
+        self.map.record_fragment(at, source, text.len());
     }
 
     /// Emits a line built from literal text and Rust fragments, recording
