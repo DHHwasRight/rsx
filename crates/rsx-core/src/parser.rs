@@ -421,10 +421,12 @@ impl<'a> Parser<'a> {
             if mutable {
                 self.sc.skip_trivia();
             }
+            let name_start = self.sc.pos();
             let name = self.sc.read_ident();
             if name.is_empty() {
                 return self.err("expected a parameter name", Span::new(from, self.sc.pos()));
             }
+            let name_span = self.sc.span_from(name_start);
             self.sc.skip_trivia();
             if self.sc.peek() != Some(b':') {
                 return self.err(
@@ -449,6 +451,7 @@ impl<'a> Parser<'a> {
                 span: Span::new(from, self.sc.pos()),
                 mutable,
                 name,
+                name_span,
                 ty,
                 ty_span,
             });

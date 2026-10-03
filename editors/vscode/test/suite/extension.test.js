@@ -291,6 +291,36 @@ suite("rsx extension", function () {
     assert.match(text, /String/, `hover was: ${text}`);
   });
 
+  test("jumps from a Rust type to where the template declares it", async function () {
+    // F12 on `User` in `fn Profile(user: &User)`. The struct is written in
+    // the template and copied into the generated code, so the answer comes
+    // from rust-analyzer and has to be translated back into the `.rsx`.
+    this.timeout(180000);
+
+    const document = await open("card.rsx");
+    const text = document.getText();
+    const offset = text.indexOf("&User") + 1;
+
+    const locations = await eventually(
+      async () =>
+        vscode.commands.executeCommand(
+          "vscode.executeDefinitionProvider",
+          document.uri,
+          document.positionAt(offset)
+        ),
+      "a definition for the User type",
+      170000
+    );
+
+    assert.ok(locations.length > 0, "expected a location");
+    const target = locations[0].targetUri || locations[0].uri;
+    assert.ok(target.fsPath.endsWith("card.rsx"), `landed in ${target.fsPath}`);
+
+    const range = locations[0].targetRange || locations[0].range;
+    const line = document.lineAt(range.start.line).text;
+    assert.match(line, /struct User/, `landed on ${line.trim()}`);
+  });
+
   test("updates diagnostics as the document changes", async () => {
     const document = await open("card.rsx");
     const editor = vscode.window.activeTextEditor;

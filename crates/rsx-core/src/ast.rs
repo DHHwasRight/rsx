@@ -170,6 +170,7 @@ pub struct Param {
     /// stores a plain field either way.
     pub mutable: bool,
     pub name: String,
+    pub name_span: Span,
     /// The type as written. `Element` marks a children parameter.
     pub ty: String,
     pub ty_span: Span,

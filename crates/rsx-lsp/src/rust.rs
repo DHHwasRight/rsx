@@ -146,15 +146,31 @@ impl RustBridge {
     ) -> Option<Location> {
         let (host, position) = self.locate(document, offset, overlay)?;
         let host_path = host.path.clone();
-        let analyzer = self.analyzer_for(&host_path)?;
-        analyzer.wait_until_primed();
+        let binary = self.settings.binary.clone();
+        let Some(analyzer) = self.analyzer_for(&host_path) else {
+            self.decline("definition", &format!("could not start `{binary}`"));
+            return None;
+        };
+        if !analyzer.wait_until_primed() {
+            eprintln!("rsx: rust-analyzer has not finished indexing; answering anyway");
+        }
         analyzer.overlay(&host_path, &host.text).ok()?;
         let result = ask_until_settled(
             analyzer,
             |a| a.definition(&host_path, position.0, position.1).ok(),
             |value| translate_definition(value, document, &host).is_none(),
         )?;
-        translate_definition(&result, document, &host)
+        let found = translate_definition(&result, document, &host);
+        if found.is_none() {
+            self.decline(
+                "definition",
+                &format!(
+                    "rust-analyzer answered {result} for {}",
+                    host_path.display()
+                ),
+            );
+        }
+        found
     }
 
     /// Hover for a position inside a Rust fragment.
@@ -177,6 +193,15 @@ impl RustBridge {
         translate_hover(&result, document, &host)
     }
 
+    /// Why the last Rust question could not be answered, for the log.
+    ///
+    /// Everything here fails quietly by design, which is right for an editor
+    /// and unhelpful when something is wrong. One line on stderr reaches the
+    /// client's output channel, where it can be read.
+    fn decline(&self, what: &str, reason: &str) {
+        eprintln!("rsx: {what} not forwarded to rust-analyzer: {reason}");
+    }
+
     /// Resolves a template offset to a position in the host file.
     fn locate(
         &mut self,
@@ -187,8 +212,20 @@ impl RustBridge {
         if !self.settings.enabled {
             return None;
         }
-        let host = self.host(document, overlay)?;
-        let host_offset = host.to_host_offset(offset)?;
+        let Some(host) = self.host(document, overlay) else {
+            self.decline(
+                "request",
+                "no Rust file compiles this template; is it covered by a \
+                 `load!`/`load_dir!` in this crate, or does it have a \
+                 generated `.rs` beside it?",
+            );
+            return None;
+        };
+        let Some(host_offset) = host.to_host_offset(offset) else {
+            // Ordinary for markup, so this is only worth a word when the
+            // author is somewhere that looks like Rust.
+            return None;
+        };
         let position = offset_to_position(&host.text, host_offset);
         Some((host, position))
     }

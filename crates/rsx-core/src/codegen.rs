@@ -182,6 +182,9 @@ impl<'a> Part<'a> {
 /// A component parameter resolved for code generation.
 struct ResolvedParam {
     name: String,
+    /// Where the name was written, so hovering the parameter in a signature
+    /// reaches `rust-analyzer` the same way its type does.
+    name_span: crate::span::Span,
     /// Whether the writer function binds this parameter `mut`.
     mutable: bool,
     /// Where the type was written, so hovering it can reach `rust-analyzer`.
@@ -374,7 +377,9 @@ impl Generator<'_, '_> {
         ))];
         for param in &params {
             let binding = if param.mutable { "mut " } else { "" };
-            signature.push(Part::owned(format!(", {binding}{}: ", param.name)));
+            signature.push(Part::owned(format!(", {binding}")));
+            signature.push(Part::mapped(param.name.clone(), param.name_span));
+            signature.push(Part::lit(": "));
             match param.ty_span {
                 Some(span) => signature.push(Part::mapped(param.fn_ty.clone(), span)),
                 None => signature.push(Part::owned(param.fn_ty.clone())),
@@ -477,6 +482,7 @@ impl Generator<'_, '_> {
                 children_index += 1;
                 resolved.push(ResolvedParam {
                     name: param.name.clone(),
+                    name_span: param.name_span,
                     mutable: param.mutable,
                     ty_span: None,
                     fn_ty: ty.clone(),
@@ -489,6 +495,7 @@ impl Generator<'_, '_> {
             let struct_ty = name_elided_lifetimes(&param.ty, &mut synth);
             resolved.push(ResolvedParam {
                 name: param.name.clone(),
+                name_span: param.name_span,
                 mutable: param.mutable,
                 ty_span: Some(param.ty_span),
                 fn_ty: param.ty.clone(),

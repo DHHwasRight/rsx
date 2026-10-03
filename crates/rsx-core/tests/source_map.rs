@@ -298,3 +298,23 @@ pub fn Card(user: &User) -> Element {
     );
     assert_eq!(map.to_source(gen), Some(src));
 }
+
+#[test]
+fn parameter_names_are_mapped_as_well_as_their_types() {
+    // Hovering a parameter in a signature should say what it is, which means
+    // the name has to reach the generated code's name, not just the type.
+    let source = "pub fn Card(user: &User, count: usize) -> Element { <p>{count}</p> }";
+    let (code, map) = compile(source);
+
+    for fragment in ["user", "&User", "count", "usize"] {
+        let src = offset_of(source, fragment);
+        let gen = map
+            .to_generated(src)
+            .unwrap_or_else(|| panic!("{fragment:?} is not mapped"));
+        assert!(
+            code[gen..].starts_with(fragment),
+            "{fragment:?} mapped to {:?}",
+            &code[gen..(gen + fragment.len() + 8).min(code.len())]
+        );
+    }
+}
