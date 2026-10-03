@@ -130,6 +130,14 @@ numeric_enum! {
     }
 }
 
+/// A replacement of a range of the document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextEdit {
+    pub range: Range,
+    #[serde(rename = "newText")]
+    pub new_text: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompletionItem {
     pub label: String,
@@ -140,6 +148,13 @@ pub struct CompletionItem {
     pub documentation: Option<MarkupContent>,
     #[serde(rename = "insertText", skip_serializing_if = "Option::is_none")]
     pub insert_text: Option<String>,
+    /// Replaces an explicit range rather than inserting at the cursor.
+    ///
+    /// Needed whenever the text already typed is part of what the completion
+    /// replaces: inserting at the cursor instead would leave that prefix
+    /// behind, turning `user.na` into `user.naname`.
+    #[serde(rename = "textEdit", skip_serializing_if = "Option::is_none")]
+    pub text_edit: Option<TextEdit>,
     #[serde(rename = "insertTextFormat")]
     pub insert_text_format: InsertTextFormat,
     /// Orders the list: components before HTML tags.

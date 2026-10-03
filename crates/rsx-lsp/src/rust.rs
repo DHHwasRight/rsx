@@ -9,12 +9,13 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+pub use rsx_core::project::Overlay;
 use rsx_core::Options;
 
 use crate::bridge::{self, Host};
 use crate::document::Document;
 use crate::protocol::{
-    CompletionItem, CompletionItemKind, Hover, InsertTextFormat, MarkupContent, Range,
+    CompletionItem, CompletionItemKind, Hover, InsertTextFormat, MarkupContent, Range, TextEdit,
 };
 use crate::rust_analyzer::{uri_to_path, RustAnalyzer};
 
@@ -49,6 +50,19 @@ pub struct RustBridge {
     /// pay for an indexing run.
     analyzers: Vec<(PathBuf, Option<RustAnalyzer>)>,
     options: Options,
+    /// The last host built, reused while the text it came from is unchanged.
+    ///
+    /// Building one compiles a directory of templates. A single keystroke
+    /// asks more than once — completion and hover both need a host, and an
+    /// editor re-requests freely — so without this the cost is paid several
+    /// times over for one answer.
+    cache: Option<CachedHost>,
+}
+
+struct CachedHost {
+    template: PathBuf,
+    fingerprint: u64,
+    host: Host,
 }
 
 impl RustBridge {
@@ -60,6 +74,7 @@ impl RustBridge {
                 header: false,
                 ..Options::default()
             },
+            cache: None,
         }
     }
 
@@ -68,14 +83,37 @@ impl RustBridge {
     }
 
     /// The Rust standing in for this document, if its code reaches a crate.
-    pub fn host(&self, document: &Document) -> Option<Host> {
+    ///
+    /// `overlay` carries the editor's unsaved buffers; without them the host
+    /// is built from the last saved text and every offset after the first
+    /// unsaved edit points at the wrong place.
+    pub fn host(&mut self, document: &Document, overlay: &Overlay) -> Option<Host> {
         let path = uri_to_path(&document.uri)?;
-        bridge::resolve(&path, &self.options)
+        let fingerprint = overlay.fingerprint();
+
+        if let Some(cached) = &self.cache {
+            if cached.template == path && cached.fingerprint == fingerprint {
+                return Some(cached.host.clone());
+            }
+        }
+
+        let host = bridge::resolve_with(&path, &self.options, overlay)?;
+        self.cache = Some(CachedHost {
+            template: path,
+            fingerprint,
+            host: host.clone(),
+        });
+        Some(host)
     }
 
     /// Whether the position is inside Rust rather than markup.
-    pub fn is_rust_position(&self, document: &Document, offset: usize) -> bool {
-        self.host(document)
+    pub fn is_rust_position(
+        &mut self,
+        document: &Document,
+        offset: usize,
+        overlay: &Overlay,
+    ) -> bool {
+        self.host(document, overlay)
             .is_some_and(|host| host.to_host_offset(offset).is_some())
     }
 
@@ -84,20 +122,26 @@ impl RustBridge {
         &mut self,
         document: &Document,
         offset: usize,
+        overlay: &Overlay,
     ) -> Option<Vec<CompletionItem>> {
-        let (host, position) = self.locate(document, offset)?;
+        let (host, position) = self.locate(document, offset, overlay)?;
         let analyzer = self.analyzer_for(&host.path)?;
         analyzer.wait_until_primed();
         analyzer.overlay(&host.path, &host.text).ok()?;
         let result = analyzer
             .completion(&host.path, position.0, position.1)
             .ok()?;
-        Some(translate_completions(&result))
+        Some(translate_completions(&result, document, &host))
     }
 
     /// Hover for a position inside a Rust fragment.
-    pub fn hover(&mut self, document: &Document, offset: usize) -> Option<Hover> {
-        let (host, position) = self.locate(document, offset)?;
+    pub fn hover(
+        &mut self,
+        document: &Document,
+        offset: usize,
+        overlay: &Overlay,
+    ) -> Option<Hover> {
+        let (host, position) = self.locate(document, offset, overlay)?;
         let host_path = host.path.clone();
         let analyzer = self.analyzer_for(&host_path)?;
         analyzer.wait_until_primed();
@@ -107,11 +151,16 @@ impl RustBridge {
     }
 
     /// Resolves a template offset to a position in the host file.
-    fn locate(&self, document: &Document, offset: usize) -> Option<(Host, (u32, u32))> {
+    fn locate(
+        &mut self,
+        document: &Document,
+        offset: usize,
+        overlay: &Overlay,
+    ) -> Option<(Host, (u32, u32))> {
         if !self.settings.enabled {
             return None;
         }
-        let host = self.host(document)?;
+        let host = self.host(document, overlay)?;
         let host_offset = host.to_host_offset(offset)?;
         let position = offset_to_position(&host.text, host_offset);
         Some((host, position))
@@ -144,6 +193,7 @@ impl RustBridge {
 
     /// Stops every analyzer that was started.
     pub fn shutdown(&mut self) {
+        self.cache = None;
         for (_, analyzer) in &mut self.analyzers {
             if let Some(analyzer) = analyzer {
                 analyzer.shutdown();
@@ -187,11 +237,20 @@ pub fn position_to_offset(text: &str, line: u32, character: u32) -> usize {
 
 /// Turns `rust-analyzer`'s completion list into ours.
 ///
-/// The text edits are dropped rather than translated. They carry ranges in
-/// the host file, and a range that lands outside the fragment — which is what
-/// an edit spanning a whole statement does — would rewrite markup. Letting
-/// the editor insert the label at the cursor is both simpler and safe.
-fn translate_completions(result: &Value) -> Vec<CompletionItem> {
+/// Two things need care, and getting either wrong is worse than offering no
+/// completion at all.
+///
+/// The text to insert comes from the `textEdit`, not the label. For a field
+/// whose expected type is a reference, `rust-analyzer` labels the item `&name`
+/// while the text to insert is just `name` — the `&` is a separate edit. Using
+/// the label would write `user.&name`.
+///
+/// And an item is only offered if every edit it carries lands inside the
+/// template. The `&` above is placed inside the generated `__w.attr(&(`
+/// wrapper, which the author cannot see and did not write; an auto-import is
+/// placed in generated code too. Such an item cannot be applied faithfully, so
+/// it is dropped rather than applied in part.
+fn translate_completions(result: &Value, document: &Document, host: &Host) -> Vec<CompletionItem> {
     let items = match result {
         Value::Array(items) => items.as_slice(),
         Value::Object(object) => match object.get("items").and_then(Value::as_array) {
@@ -205,6 +264,33 @@ fn translate_completions(result: &Value) -> Vec<CompletionItem> {
         .iter()
         .filter_map(|item| {
             let label = item.get("label")?.as_str()?.to_string();
+
+            // An edit outside the template cannot be carried across.
+            if item
+                .get("additionalTextEdits")
+                .and_then(Value::as_array)
+                .is_some_and(|edits| !edits.is_empty())
+            {
+                return None;
+            }
+
+            let edit = item.get("textEdit");
+            let new_text = edit
+                .and_then(|e| e.get("newText"))
+                .and_then(Value::as_str)
+                .or_else(|| item.get("insertText").and_then(Value::as_str))
+                .unwrap_or(&label)
+                .to_string();
+
+            // Prefer replacing the range the server named; fall back to
+            // inserting at the cursor when it does not map home.
+            let text_edit = edit
+                .and_then(|e| translate_range(e.get("range")?, document, host))
+                .map(|range| TextEdit {
+                    range,
+                    new_text: new_text.clone(),
+                });
+
             Some(CompletionItem {
                 kind: completion_kind(item),
                 detail: item
@@ -212,23 +298,28 @@ fn translate_completions(result: &Value) -> Vec<CompletionItem> {
                     .and_then(Value::as_str)
                     .map(str::to_string),
                 documentation: documentation(item),
-                // Insert what is on the label; see above.
-                insert_text: Some(
-                    item.get("insertText")
-                        .and_then(Value::as_str)
-                        .unwrap_or(&label)
-                        .to_string(),
-                ),
+                insert_text: Some(new_text),
                 insert_text_format: InsertTextFormat::PlainText,
                 sort_text: item
                     .get("sortText")
                     .and_then(Value::as_str)
                     .map(|s| format!("0{s}"))
                     .or_else(|| Some(format!("0{label}"))),
+                text_edit,
                 label,
             })
         })
         .collect()
+}
+
+/// Maps a range in the host file back into the template.
+fn translate_range(range: &Value, document: &Document, host: &Host) -> Option<Range> {
+    let start = position_of(range.get("start")?, &host.text)?;
+    let end = position_of(range.get("end")?, &host.text)?;
+    Some(Range::new(
+        document.position(host.to_template_offset(start)?),
+        document.position(host.to_template_offset(end)?),
+    ))
 }
 
 fn completion_kind(item: &Value) -> CompletionItemKind {
@@ -307,8 +398,40 @@ mod tests {
         assert_eq!(position_to_offset(text, 0, 3), text.len() - 1);
     }
 
+    /// A document and host whose fragment is the whole text, so ranges map
+    /// one to one and the assertions are about translation, not mapping.
+    fn fixture() -> (Document, Host) {
+        let text = "pub fn A(user: &User) -> Element { <p>{user.name}</p> }";
+        let document = Document::new("file:///a.rsx", text, 1);
+        let mut map = rsx_core::SourceMap::new();
+        map.record_fragment(
+            0,
+            rsx_core::Span::new(
+                rsx_core::Pos {
+                    offset: 0,
+                    line: 1,
+                    col: 1,
+                },
+                rsx_core::Pos {
+                    offset: text.len(),
+                    line: 1,
+                    col: 1,
+                },
+            ),
+            text.len(),
+        );
+        let host = Host {
+            path: PathBuf::from("/a.rs"),
+            text: text.to_string(),
+            shift: 0,
+            map,
+        };
+        (document, host)
+    }
+
     #[test]
     fn translates_a_completion_list() {
+        let (document, host) = fixture();
         let result = json!({
             "isIncomplete": false,
             "items": [
@@ -318,7 +441,7 @@ mod tests {
             ]
         });
 
-        let items = translate_completions(&result);
+        let items = translate_completions(&result, &document, &host);
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].label, "name");
         assert_eq!(items[0].kind, CompletionItemKind::Field);
@@ -331,8 +454,80 @@ mod tests {
 
     #[test]
     fn accepts_a_bare_array_of_completions() {
-        let items = translate_completions(&json!([{ "label": "x", "kind": 5 }]));
+        let (document, host) = fixture();
+        let items = translate_completions(&json!([{ "label": "x", "kind": 5 }]), &document, &host);
         assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn inserts_the_edit_text_rather_than_the_label() {
+        // `rust-analyzer` labels a field whose expected type is a reference
+        // `&name`, while the text to insert is `name`. Inserting the label
+        // writes `user.&name`.
+        let (document, host) = fixture();
+        let items = translate_completions(
+            &json!({"items": [{
+                "label": "&name",
+                "kind": 5,
+                "textEdit": {
+                    "newText": "name",
+                    "range": {"start": {"line": 0, "character": 10},
+                              "end": {"line": 0, "character": 10}}
+                }
+            }]}),
+            &document,
+            &host,
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].insert_text.as_deref(), Some("name"));
+        assert_eq!(items[0].text_edit.as_ref().unwrap().new_text, "name");
+    }
+
+    #[test]
+    fn drops_an_item_whose_extra_edit_lands_in_generated_code() {
+        // The `&` of a reference completion is placed inside the generated
+        // `__w.text(&(` wrapper. The author cannot see it, so the item cannot
+        // be applied as the server meant it.
+        let (document, host) = fixture();
+        let items = translate_completions(
+            &json!({"items": [
+                {"label": "&name", "kind": 5,
+                 "textEdit": {"newText": "name",
+                              "range": {"start": {"line": 0, "character": 10},
+                                        "end": {"line": 0, "character": 10}}},
+                 "additionalTextEdits": [
+                    {"newText": "&", "range": {"start": {"line": 0, "character": 2},
+                                               "end": {"line": 0, "character": 2}}}]},
+                {"label": "name", "kind": 5}
+            ]}),
+            &document,
+            &host,
+        );
+
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["name"], "the reference variant should be gone");
+    }
+
+    #[test]
+    fn a_replacement_range_is_mapped_back_into_the_template() {
+        // Completing after a typed prefix replaces that prefix. Inserting at
+        // the cursor instead would turn `user.na` into `user.naname`.
+        let (document, host) = fixture();
+        let items = translate_completions(
+            &json!({"items": [{
+                "label": "name", "kind": 5,
+                "textEdit": {"newText": "name",
+                             "range": {"start": {"line": 0, "character": 44},
+                                       "end": {"line": 0, "character": 46}}}
+            }]}),
+            &document,
+            &host,
+        );
+
+        let edit = items[0].text_edit.as_ref().expect("no edit");
+        assert_eq!(edit.range.start.character, 44);
+        assert_eq!(edit.range.end.character, 46);
     }
 
     #[test]

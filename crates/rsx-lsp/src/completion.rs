@@ -105,6 +105,7 @@ fn tag_names(document: &Document, store: &DocumentStore) -> Vec<CompletionItem> 
             documentation: Some(MarkupContent::markdown(*description)),
             insert_text: Some(insert),
             insert_text_format: InsertTextFormat::Snippet,
+            text_edit: None,
             sort_text: Some(format!("{HTML_SORT}{tag}")),
         });
     }
@@ -149,6 +150,7 @@ fn component_item(component: &Component) -> CompletionItem {
         ))),
         insert_text: Some(insert),
         insert_text_format: InsertTextFormat::Snippet,
+        text_edit: None,
         sort_text: Some(format!("{COMPONENT_SORT}{}", component.name)),
     }
 }
@@ -176,6 +178,7 @@ fn attributes(tag: &str, document: &Document, store: &DocumentStore) -> Vec<Comp
                 documentation: None,
                 insert_text: Some(format!("{}={{$1}}", param.name)),
                 insert_text_format: InsertTextFormat::Snippet,
+                text_edit: None,
                 sort_text: Some(format!("{COMPONENT_SORT}{}", param.name)),
             })
             .collect();
@@ -190,6 +193,7 @@ fn attributes(tag: &str, document: &Document, store: &DocumentStore) -> Vec<Comp
             documentation: None,
             insert_text: Some(format!("{name}=\"$1\"")),
             insert_text_format: InsertTextFormat::Snippet,
+            text_edit: None,
             sort_text: Some(format!("{HTML_SORT}{name}")),
         })
         .collect()

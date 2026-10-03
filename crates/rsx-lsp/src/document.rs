@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use rsx_core::ast::{Component, File};
+use rsx_core::project::Overlay;
 use rsx_core::span::Span;
 use rsx_core::{generate, parse, Error, Options, Registry};
 
@@ -276,6 +277,20 @@ impl DocumentStore {
             a.name.cmp(&b.name).then_with(|| a_doc.uri.cmp(&b_doc.uri))
         });
         all
+    }
+
+    /// The open buffers, as contents standing in for what is on disk.
+    ///
+    /// A question about a template is a question about what the author is
+    /// looking at, which is rarely the saved copy.
+    pub fn overlay(&self) -> Overlay {
+        let mut overlay = Overlay::new();
+        for document in self.documents.values() {
+            if let Some(path) = crate::rust_analyzer::uri_to_path(&document.uri) {
+                overlay.insert(path, document.text.clone());
+            }
+        }
+        overlay
     }
 
     /// Finds where a component is declared, preferring the document asking.

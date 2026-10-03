@@ -276,13 +276,14 @@ fn dot_completion_in_a_template_comes_from_rust_analyzer() {
         ..Default::default()
     });
 
+    let overlay = store.overlay();
     assert!(
-        bridge.is_rust_position(document, offset),
+        bridge.is_rust_position(document, offset, &overlay),
         "a position after a dot should be Rust"
     );
 
     let items = bridge
-        .completion(document, offset)
+        .completion(document, offset, &overlay)
         .expect("no completions came back");
     let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
 
@@ -307,11 +308,12 @@ fn a_markup_position_is_not_sent_to_rust_analyzer() {
     store.open(&uri, &source, 1);
     let document = store.get(&uri).unwrap();
 
-    let bridge = rsx_lsp::rust::RustBridge::new(Default::default());
+    let mut bridge = rsx_lsp::rust::RustBridge::new(Default::default());
+    let overlay = store.overlay();
     for marker in ["<div", "class=\"card\"", "<h2>"] {
         let offset = source.find(marker).unwrap();
         assert!(
-            !bridge.is_rust_position(document, offset),
+            !bridge.is_rust_position(document, offset, &overlay),
             "{marker:?} is markup, not Rust"
         );
     }
@@ -328,6 +330,80 @@ fn a_template_outside_any_crate_has_no_host() {
 
     let options = rsx_core::Options::default();
     assert!(rsx_lsp::bridge::resolve(&template, &options).is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn unsaved_edits_are_what_gets_analysed() {
+    // An editor asks about the buffer, not the file. Compiling the saved copy
+    // answers about different text, and every offset after the first unsaved
+    // change lands somewhere else — so completion would be offered for the
+    // wrong expression, which is worse than offering none.
+    let dir = fixture_crate("rsx-bridge-unsaved-test");
+    let template = dir.join("src/views/card.rsx");
+    let saved = std::fs::read_to_string(&template).unwrap();
+
+    // A second component, typed but never saved.
+    let edited = format!(
+        "{saved}\npub fn Extra(user: &User) -> Element {{\n    <b>{{user.posts}}</b>\n}}\n"
+    );
+
+    let mut store = rsx_lsp::DocumentStore::new();
+    let uri = format!("file://{}", template.display());
+    store.open(&uri, &edited, 2);
+    let document = store.get(&uri).unwrap();
+
+    let mut bridge = rsx_lsp::rust::RustBridge::new(Default::default());
+    let offset = edited.rfind("user.posts").unwrap() + "user.".len();
+
+    // With the buffer, the new expression is Rust.
+    assert!(
+        bridge.is_rust_position(document, offset, &store.overlay()),
+        "an unsaved expression should still be Rust"
+    );
+    // Without it, the host is built from the saved text, which is shorter
+    // than this offset and knows nothing about it.
+    assert!(
+        !bridge.is_rust_position(document, offset, &rsx_lsp::rust::Overlay::new()),
+        "the saved copy should not resolve an offset it does not contain"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_host_is_reused_until_the_text_changes() {
+    // Building one compiles a directory of templates, and a single keystroke
+    // asks more than once.
+    let dir = fixture_crate("rsx-bridge-cache-test");
+    let template = dir.join("src/views/card.rsx");
+    let source = std::fs::read_to_string(&template).unwrap();
+
+    let mut store = rsx_lsp::DocumentStore::new();
+    let uri = format!("file://{}", template.display());
+    store.open(&uri, &source, 1);
+
+    let mut bridge = rsx_lsp::rust::RustBridge::new(Default::default());
+    let overlay = store.overlay();
+    let document = store.get(&uri).unwrap();
+
+    let first = bridge.host(document, &overlay).expect("no host");
+    let again = bridge.host(document, &overlay).expect("no host");
+    assert_eq!(first.text, again.text);
+    assert_eq!(first.shift, again.shift);
+
+    // A changed buffer must not be served from the cache.
+    store.update(
+        &uri,
+        &format!("{source}\npub fn More() -> Element {{ <i>x</i> }}\n"),
+        2,
+    );
+    let changed = store.overlay();
+    let third = bridge
+        .host(store.get(&uri).unwrap(), &changed)
+        .expect("no host");
+    assert_ne!(first.text, third.text, "the cache outlived the text");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

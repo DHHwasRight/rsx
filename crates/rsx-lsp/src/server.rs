@@ -109,7 +109,11 @@ impl Server {
                     "definitionProvider": true,
                     "documentSymbolProvider": true,
                     "completionProvider": {
-                        "triggerCharacters": ["<", " ", ":"],
+                        // `.` matters most: without it an editor never
+                        // asks after `user.`, which is exactly where the
+                        // answer has to come from rust-analyzer. `<` opens a
+                        // tag, a space starts an attribute, `:` a path.
+                        "triggerCharacters": ["<", " ", ":", "."],
                     },
                 },
                 "serverInfo": { "name": "rsx-lsp", "version": env!("CARGO_PKG_VERSION") },
@@ -172,10 +176,11 @@ impl Server {
                 // `rust-analyzer` knows more about that than this server ever
                 // will. Markup positions, and anything it cannot answer, fall
                 // back to what the template itself says.
+                let overlay = self.store.overlay();
                 let from_rust = self
                     .rust
                     .is_enabled()
-                    .then(|| self.rust.hover(document, offset))
+                    .then(|| self.rust.hover(document, offset, &overlay))
                     .flatten();
 
                 let result = match from_rust {
@@ -213,10 +218,11 @@ impl Server {
                 };
                 let offset = document.offset(position);
 
+                let overlay = self.store.overlay();
                 let from_rust = self
                     .rust
                     .is_enabled()
-                    .then(|| self.rust.completion(document, offset))
+                    .then(|| self.rust.completion(document, offset, &overlay))
                     .flatten()
                     .filter(|items| !items.is_empty());
 

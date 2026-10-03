@@ -4,7 +4,7 @@
 //! before any of them is generated, which is what lets a call in one file be
 //! checked against a declaration in another.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -19,6 +19,69 @@ use crate::span::Span;
 
 /// The file extension this crate compiles.
 pub const EXTENSION: &str = "rsx";
+
+/// Contents that stand in for what is on disk.
+///
+/// An editor asks about the buffer in front of the user, which is usually not
+/// what the file says: the edit that prompted the question has not been saved.
+/// Compiling the disk copy would answer about different text, and every offset
+/// after the first unsaved change would be wrong.
+#[derive(Debug, Clone, Default)]
+pub struct Overlay {
+    files: HashMap<PathBuf, String>,
+}
+
+impl Overlay {
+    pub fn new() -> Self {
+        Overlay::default()
+    }
+
+    /// Makes `text` the contents of `path` for this compilation.
+    pub fn insert(&mut self, path: impl Into<PathBuf>, text: impl Into<String>) {
+        self.files.insert(path.into(), text.into());
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
+    /// A value that changes whenever the overlaid text does.
+    ///
+    /// Lets a caller tell whether a compilation it already has is still
+    /// current, without comparing the text itself.
+    pub fn fingerprint(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut entries: Vec<_> = self.files.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        let mut hasher = DefaultHasher::new();
+        for (path, text) in entries {
+            path.hash(&mut hasher);
+            text.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// The overlaid contents of `path`, or what is on disk.
+    pub fn read(&self, path: &Path) -> Result<String> {
+        if let Some(text) = self.files.get(path) {
+            return Ok(text.clone());
+        }
+        // Paths reach here from a directory walk and from an editor, which
+        // spell them differently often enough to be worth reconciling.
+        if !self.files.is_empty() {
+            if let Ok(canonical) = path.canonicalize() {
+                for (candidate, text) in &self.files {
+                    if candidate.canonicalize().is_ok_and(|c| c == canonical) {
+                        return Ok(text.clone());
+                    }
+                }
+            }
+        }
+        read(path)
+    }
+}
 
 /// One generated file.
 #[derive(Debug, Clone)]
@@ -120,7 +183,16 @@ pub fn compile_source(source: &str, options: &Options) -> Result<String> {
 
 /// Compiles one `.rsx` file.
 pub fn compile_file(path: &Path, options: &Options) -> Result<CompiledFile> {
-    let source = read(path)?;
+    compile_file_with(path, options, &Overlay::new())
+}
+
+/// Compiles one `.rsx` file, preferring overlaid contents.
+pub fn compile_file_with(
+    path: &Path,
+    options: &Options,
+    overlay: &Overlay,
+) -> Result<CompiledFile> {
+    let source = overlay.read(path)?;
     let file = parser::parse(&source).map_err(|e| e.in_file(path))?;
     let mut registry = Registry::new();
     registry.add_file(&file);
@@ -142,6 +214,15 @@ pub fn compile_file(path: &Path, options: &Options) -> Result<CompiledFile> {
 /// the moment it is most wanted, so the broken file is left out and reported
 /// separately.
 pub fn compile_dir_lossy(root: &Path, options: &Options) -> (Compilation, Vec<Error>) {
+    compile_dir_lossy_with(root, options, &Overlay::new())
+}
+
+/// The lenient compile, preferring overlaid contents over what is on disk.
+pub fn compile_dir_lossy_with(
+    root: &Path,
+    options: &Options,
+    overlay: &Overlay,
+) -> (Compilation, Vec<Error>) {
     let mut errors = Vec::new();
     let paths = match find_sources(root) {
         Ok(paths) => paths,
@@ -151,7 +232,7 @@ pub fn compile_dir_lossy(root: &Path, options: &Options) -> (Compilation, Vec<Er
     let mut parsed = Vec::new();
     let mut registry = Registry::new();
     for path in paths {
-        let source = match read(&path) {
+        let source = match overlay.read(&path) {
             Ok(source) => source,
             Err(error) => {
                 errors.push(error);

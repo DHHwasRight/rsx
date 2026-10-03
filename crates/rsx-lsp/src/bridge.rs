@@ -17,7 +17,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rsx_core::project::{self, Compilation};
+use rsx_core::project::{self, Compilation, Overlay};
 use rsx_core::{Options, SourceMap};
 
 /// A real Rust file to ask `rust-analyzer` about, and what to overlay on it.
@@ -62,7 +62,15 @@ pub fn crate_root(path: &Path) -> Option<PathBuf> {
 /// output that is `mod`-ed in — whereas a macro invocation naming the
 /// template is proof, because the invocation is itself inside a crate.
 pub fn resolve(template: &Path, options: &Options) -> Option<Host> {
-    macro_host(template, options).or_else(|| sibling_host(template, options))
+    resolve_with(template, options, &Overlay::new())
+}
+
+/// Builds the host, using `overlay` in place of what is on disk.
+///
+/// An editor passes the buffers it has open, so the question is answered
+/// about the text in front of the user rather than the last saved copy.
+pub fn resolve_with(template: &Path, options: &Options, overlay: &Overlay) -> Option<Host> {
+    macro_host(template, options, overlay).or_else(|| sibling_host(template, options, overlay))
 }
 
 /// The outermost `Cargo.toml` above `path` that declares a workspace.
@@ -77,12 +85,12 @@ pub fn workspace_root(path: &Path) -> Option<PathBuf> {
 }
 
 /// `rsx generate` mode: the generated file sits beside the template.
-fn sibling_host(template: &Path, options: &Options) -> Option<Host> {
+fn sibling_host(template: &Path, options: &Options, overlay: &Overlay) -> Option<Host> {
     let sibling = template.with_extension("rs");
     if !sibling.is_file() {
         return None;
     }
-    let compiled = project::compile_file(template, options).ok()?;
+    let compiled = project::compile_file_with(template, options, overlay).ok()?;
     Some(Host {
         path: sibling,
         text: compiled.code,
@@ -93,7 +101,7 @@ fn sibling_host(template: &Path, options: &Options) -> Option<Host> {
 
 /// Macro mode: the generated code lives inside whatever file invokes the
 /// macro, so that file is overlaid with the expansion in place of the call.
-fn macro_host(template: &Path, options: &Options) -> Option<Host> {
+fn macro_host(template: &Path, options: &Options, overlay: &Overlay) -> Option<Host> {
     let root = crate_root(template)?;
     let (host_path, invocation) = find_invocation(&root, template)?;
     let host_source = fs::read_to_string(&host_path).ok()?;
@@ -101,9 +109,11 @@ fn macro_host(template: &Path, options: &Options) -> Option<Host> {
     let compilation: Compilation = match invocation.kind {
         // Lossy: a sibling template that does not parse must not take Rust
         // support away from this one.
-        InvocationKind::Dir => project::compile_dir_lossy(&invocation.target, options).0,
+        InvocationKind::Dir => {
+            project::compile_dir_lossy_with(&invocation.target, options, overlay).0
+        }
         InvocationKind::File => {
-            let file = project::compile_file(&invocation.target, options).ok()?;
+            let file = project::compile_file_with(&invocation.target, options, overlay).ok()?;
             Compilation {
                 files: vec![file],
                 ..Compilation::default()

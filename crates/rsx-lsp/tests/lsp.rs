@@ -702,10 +702,23 @@ mod server_tests {
         assert_eq!(capabilities["hoverProvider"], json!(true));
         assert_eq!(capabilities["definitionProvider"], json!(true));
         assert_eq!(capabilities["documentSymbolProvider"], json!(true));
-        assert_eq!(
-            capabilities["completionProvider"]["triggerCharacters"][0],
-            json!("<")
-        );
+        // The trigger characters are a contract with the editor: a client
+        // only asks for completions after one of them. Leaving `.` out meant
+        // typing `user.` never reached the server, so the whole bridge to
+        // rust-analyzer sat there doing nothing. Calling the provider
+        // directly, as a test does, hides that completely.
+        let triggers: Vec<&str> = capabilities["completionProvider"]["triggerCharacters"]
+            .as_array()
+            .expect("no trigger characters")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        for needed in ["<", " ", ":", "."] {
+            assert!(
+                triggers.contains(&needed),
+                "missing trigger {needed:?} in {triggers:?}"
+            );
+        }
     }
 
     #[test]
