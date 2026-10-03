@@ -1,0 +1,13 @@
+[package]
+name = "rsx-server"
+description = "Buffer pooling and cache integration for rendering rsx templates in a server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rsx = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

@@ -381,6 +381,7 @@ rsx lsp                   Start the language server on stdin/stdout
 | `rsx-macros` | `load!` and `load_dir!` |
 | `rsx-cli` | the `rsx` binary |
 | `rsx-lsp` | the language server, and the bridge to `rust-analyzer` |
+| `rsx-server` | buffer pooling and the cache boundary, for serving pages |
 
 `rsx-core` and `rsx` have no dependencies; `rsx-lsp` has `serde`. `rsx-core` has no opinion on how it
 is driven: `compile_source`, `compile_file` and `compile_dir` are the entry
@@ -421,6 +422,49 @@ UPDATE_GOLDEN=1 cargo test -p rsx-core --test golden
 
 One test asserts the fixtures still exercise every kind of node, so the set
 cannot quietly stop covering a feature.
+
+## Serving pages
+
+`rsx-server` adds what a server needs on top of the runtime: somewhere for
+the bytes to go, and a shape a cache can call. It is a separate crate so a
+program that renders one page at build time does not acquire a buffer pool.
+
+```rust
+let page = cache
+    .get_or_insert(key, || async {
+        let user = db.user(id).await?;              // await here
+        render_owned(&pool, Page { user: &user })   // sync from here down
+    })
+    .await?;
+```
+
+Rendering is synchronous by design: the data is awaited first, then written.
+A `Writer` is therefore never held across an `.await` — it would be sound if
+it were, and a test asserts it stays `Send` so an async seam can be added
+later, but not doing so keeps the render a tight loop with no state machine
+around it.
+
+Where the bytes are copied, and where they are not:
+
+| Step | Cost |
+| --- | --- |
+| pool → `Writer` → `String` → `Arc` | moves of (ptr, len, cap); **content never copied** |
+| component → component | none; one buffer for the whole page |
+| `Arc<String>` → cache L1 | refcount bump |
+| `Arc<String>` → Redis | **copy**, in the cache crate |
+| `Arc<String>` → socket | **copy**, into the kernel |
+
+Both unavoidable copies are at an edge of the process. The tests assert this
+by comparing allocation addresses rather than by saying so in a comment:
+the pointer a pooled buffer starts with is the pointer the `Arc` ends up
+with.
+
+A buffer that becomes an `Arc` does not return to the pool, because it no
+longer exists separately from it. That is not a leak: a cached page is
+rendered once per cache lifetime, and `BufferPool::reclaim` takes the
+allocation back if the cache later hands over the last `Arc`. The paths that
+do return their buffer — `render_streaming` and `render_borrowed` — are the
+uncached ones, which is where pooling is worth having.
 
 ## Limitations
 

@@ -48,6 +48,6 @@ pub fn render(template: impl Template) -> Result<String> {
 }
 
 /// Renders a template into an [`std::io::Write`], flushing in chunks.
-pub fn render_to(template: impl Template, sink: &mut dyn std::io::Write) -> Result {
+pub fn render_to(template: impl Template, sink: &mut (dyn std::io::Write + Send)) -> Result {
     template.render_to(sink)
 }

@@ -16,8 +16,15 @@ const DEFAULT_CHUNK: usize = 8 * 1024;
 /// `chunk`, so a large page streams out instead of being held whole in memory.
 pub struct Writer<'a> {
     buf: Vec<u8>,
-    sink: Option<&'a mut (dyn io::Write + 'a)>,
+    // `+ Send` so a `Writer` can be held across an `.await` in a task that
+    // `tokio::spawn` will accept. Without it the whole future is `!Send`,
+    // which is a confusing error a long way from its cause.
+    sink: Option<&'a mut (dyn io::Write + Send + 'a)>,
     chunk: usize,
+    /// Whether bytes reached the buffer through [`io::Write`], which accepts
+    /// anything. Everything else this type writes is `&str` or an ASCII
+    /// entity, so the common path knows it holds UTF-8 without checking.
+    unchecked_bytes: bool,
 }
 
 impl Default for Writer<'static> {
@@ -34,21 +41,42 @@ impl Writer<'static> {
 
     /// Creates a buffering writer with a preallocated buffer.
     pub fn with_capacity(capacity: usize) -> Self {
+        Writer::from_buffer(Vec::with_capacity(capacity))
+    }
+
+    /// Creates a writer over an allocation that already exists.
+    ///
+    /// This is the hook a buffer pool uses: the bytes are discarded and the
+    /// capacity is kept, so a steady-state server stops allocating for the
+    /// page body entirely.
+    pub fn from_buffer(mut buf: Vec<u8>) -> Self {
+        buf.clear();
         Writer {
-            buf: Vec::with_capacity(capacity),
+            buf,
             sink: None,
             chunk: usize::MAX,
+            unchecked_bytes: false,
         }
     }
 }
 
 impl<'a> Writer<'a> {
     /// Creates a writer that streams into `sink` in chunks.
-    pub fn streaming(sink: &'a mut (dyn io::Write + 'a)) -> Self {
+    pub fn streaming(sink: &'a mut (dyn io::Write + Send + 'a)) -> Self {
+        Writer::streaming_with(sink, Vec::with_capacity(DEFAULT_CHUNK))
+    }
+
+    /// A streaming writer whose chunk buffer already exists.
+    ///
+    /// The pooling hook for the streaming path: recover the buffer with
+    /// [`Writer::finish_buffer`] once the response is written.
+    pub fn streaming_with(sink: &'a mut (dyn io::Write + Send + 'a), mut buf: Vec<u8>) -> Self {
+        buf.clear();
         Writer {
-            buf: Vec::with_capacity(DEFAULT_CHUNK),
+            buf,
             sink: Some(sink),
             chunk: DEFAULT_CHUNK,
+            unchecked_bytes: false,
         }
     }
 
@@ -187,6 +215,15 @@ impl<'a> Writer<'a> {
         self.flush()
     }
 
+    /// Flushes and hands back the chunk buffer for reuse.
+    ///
+    /// The buffer is returned even when the flush fails, because an
+    /// allocation is worth keeping either way.
+    pub fn finish_buffer(mut self) -> (Vec<u8>, Result) {
+        let outcome = self.flush();
+        (self.buf, outcome)
+    }
+
     /// Consumes a buffering writer and returns the rendered bytes.
     ///
     /// Returns an error for a streaming writer, whose output has already left
@@ -201,10 +238,22 @@ impl<'a> Writer<'a> {
     }
 
     /// Consumes a buffering writer and returns the rendered document.
+    ///
+    /// No copy: the buffer's allocation becomes the `String`'s.
     pub fn into_string(self) -> Result<String> {
+        let unchecked = self.unchecked_bytes;
         let bytes = self.into_bytes()?;
-        // Every write path appends either a `&str` or an ASCII entity, so the
-        // buffer is UTF-8 by construction.
+
+        if unchecked {
+            // Something went through `io::Write`, which accepts any bytes.
+            // Validating moves the allocation rather than copying it, and
+            // only happens on a path that opted out of the guarantee.
+            return String::from_utf8(bytes)
+                .map_err(|e| Error::custom(format!("rendered output is not UTF-8: {e}")));
+        }
+
+        // Safety: every other write path appends a `&str` or an ASCII
+        // entity, so the buffer is UTF-8 by construction.
         Ok(unsafe { String::from_utf8_unchecked(bytes) })
     }
 
@@ -219,6 +268,8 @@ impl<'a> Writer<'a> {
 
 impl io::Write for Writer<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // Arbitrary bytes, so `into_string` can no longer assume UTF-8.
+        self.unchecked_bytes = true;
         self.buf.extend_from_slice(buf);
         self.maybe_flush()?;
         Ok(buf.len())

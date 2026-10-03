@@ -27,7 +27,7 @@ pub trait Template {
     }
 
     /// Renders straight into an [`io::Write`], flushing in chunks.
-    fn render_to(self, sink: &mut dyn io::Write) -> Result
+    fn render_to(self, sink: &mut (dyn io::Write + Send)) -> Result
     where
         Self: Sized,
     {
