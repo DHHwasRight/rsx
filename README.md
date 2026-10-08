@@ -33,7 +33,7 @@ pub fn Page(user: &User) -> Element {
 
 ```toml
 [dependencies]
-rsx = { path = "crates/rsx" }
+rsx = { git = "https://github.com/DHHwasRight/rsx.git", branch = "main" }
 ```
 
 ```rust
@@ -206,8 +206,26 @@ because no `{` follows. The same check keeps `Bash (the shell); see below`
 from reading as a function call — a statement's `(` has to be flush against
 its name, the way Rust is written.
 
-One case needs care. `if a<b {` has a `<` followed by a letter, which reads as
-a tag. Write `if a < b {`, with spaces, and it parses as the comparison it is.
+Two cases need care.
+
+`if a<b {` has a `<` followed by a letter, which reads as a tag. Write
+`if a < b {`, with spaces, and it parses as the comparison it is.
+
+And a `let` whose right-hand side opens a block is read as markup, because the
+`{` is taken for the body of a conditional:
+
+```rust
+let label = if flag { "on" } else { "off" };     // emitted as text
+let label = match flag { true => "on", _ => … }; // likewise
+```
+
+`rustc` then reports `label` as an unbound name at the macro call site, which
+is a long way from the line that caused it. Lift the expression into a `fn`
+beside the template and call it:
+
+```rust
+fn label(flag: bool) -> &'static str { if flag { "on" } else { "off" } }
+```
 
 ### Fragments, comments, doctype
 
@@ -466,6 +484,18 @@ allocation back if the cache later hands over the last `Arc`. The paths that
 do return their buffer — `render_streaming` and `render_borrowed` — are the
 uncached ones, which is where pooling is worth having.
 
+## Sites built with it
+
+[prerender](https://github.com/DHHwasRight/prerender) is a static site
+generator whose templates are `.rsx` files, so its examples are a working
+codebase rather than a snippet:
+
+| File | What it shows |
+|---|---|
+| [`nested-cards/src/views/layouts.rsx`](https://github.com/DHHwasRight/prerender/blob/main/examples/nested-cards/src/views/layouts.rsx) | Four layouts composing through `children`, and attributes computed in Rust |
+| [`nested-cards/src/views/pages.rsx`](https://github.com/DHHwasRight/prerender/blob/main/examples/nested-cards/src/views/pages.rsx) | `for`, `if` and component calls over real data |
+| [`docs/src/views/layouts.rsx`](https://github.com/DHHwasRight/prerender/blob/main/examples/docs/src/views/layouts.rsx) | The same idea at three levels, smaller |
+
 ## Limitations
 
 - Parameter types that elide a lifetime inside a path — `Foo<'_>`, or a `Foo`
@@ -478,6 +508,8 @@ uncached ones, which is where pooling is worth having.
   its input already tokenised, and tokenising discards the spacing markup
   depends on: `<h1>Hello, {name}!</h1>` would render with a space before the
   comma.
+- A `let` binding whose value opens a block is parsed as markup; see
+  [How Rust is told from text](#how-rust-is-told-from-text).
 - Diagnostics for template syntax point into the `.rsx` file. Diagnostics for
   the Rust *inside* a template come from `rustc` and point at the macro call
   site, because a proc macro cannot attach spans to a file it read. When one
@@ -486,7 +518,7 @@ uncached ones, which is where pooling is worth having.
 
 ## Lineage
 
-This is a Rust descendant of [`crx`](../../crystal/templ), a Crystal shard,
+This is a Rust descendant of `crx`, a Crystal shard,
 which was itself a descendant of Go's `templ`. The feature set is the same one
 that suite covers — control flow, children, fragments, raw output, spreads,
 entity-aware escaping, source maps, a language server — with the syntax moved
