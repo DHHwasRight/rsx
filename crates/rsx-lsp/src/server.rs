@@ -11,7 +11,8 @@ use serde_json::{json, Value};
 
 use crate::protocol::Position;
 use crate::rust::{RustBridge, Settings};
-use crate::{completion, definition, hover, symbols, DocumentStore};
+use crate::workspace::Index;
+use crate::{completion, definition, hover, references, symbols, DocumentStore};
 
 /// Runs the server on stdin and stdout until the client disconnects.
 pub fn run() -> io::Result<()> {
@@ -70,6 +71,8 @@ struct Server {
     store: DocumentStore,
     /// Answers the questions that are about Rust rather than about markup.
     rust: RustBridge,
+    /// The files the editor has not opened, which is most of the project.
+    index: Index,
 }
 
 impl Server {
@@ -77,6 +80,7 @@ impl Server {
         Server {
             store: DocumentStore::new(),
             rust: RustBridge::new(Settings::default()),
+            index: Index::empty(),
         }
     }
 
@@ -102,12 +106,17 @@ impl Server {
         match method {
             "initialize" => {
                 self.configure(params);
+                // Reading the project costs one pass over the `.rsx` files,
+                // and it happens here rather than on the first question so
+                // that the first question is not the slow one.
+                self.index = Index::from_initialize(params);
                 Outcome::Reply(json!({
                 "capabilities": {
                     "textDocumentSync": 1, // full text on every change
                     "hoverProvider": true,
                     "definitionProvider": true,
                     "documentSymbolProvider": true,
+                    "referencesProvider": true,
                     "completionProvider": {
                         // `.` matters most: without it an editor never
                         // asks after `user.`, which is exactly where the
@@ -223,6 +232,36 @@ impl Server {
                     .unwrap_or_default();
                 let result = self.store.get(&uri).and_then(symbols::handle);
                 Outcome::Reply(to_value(result))
+            }
+
+            "textDocument/references" => {
+                let (uri, position) = location(params);
+                let Some(document) = self.store.get(&uri) else {
+                    return Outcome::Reply(Value::Null);
+                };
+                // The flag is the client's, and leaving it out means "no":
+                // an editor that wanted the declaration would have said so.
+                let include_declaration = params
+                    .get("context")
+                    .and_then(|c| c.get("includeDeclaration"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let result = references::handle(
+                    document,
+                    position,
+                    &self.store,
+                    &self.index,
+                    include_declaration,
+                );
+                Outcome::Reply(to_value(result))
+            }
+
+            // A save is the moment the file on disk and the file on screen
+            // agree again, which is the cheapest honest point to re-read the
+            // rest of the project.
+            "textDocument/didSave" => {
+                self.index.refresh();
+                Outcome::Ignore
             }
 
             "textDocument/completion" => {

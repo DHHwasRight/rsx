@@ -28,10 +28,12 @@ pub mod find_node;
 pub mod hover;
 pub mod html;
 pub mod protocol;
+pub mod references;
 pub mod rust;
 pub mod rust_analyzer;
 pub mod server;
 pub mod symbols;
+pub mod workspace;
 
 pub use document::{Document, DocumentStore};
 pub use server::run;

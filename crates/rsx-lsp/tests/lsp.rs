@@ -1,7 +1,8 @@
 //! Language server behaviour, ported from the Crystal `crx` LSP specs.
 
 use rsx_lsp::protocol::{CompletionItemKind, InsertTextFormat, Position};
-use rsx_lsp::{completion, definition, find_node, hover, symbols, DocumentStore};
+use rsx_lsp::workspace::Index;
+use rsx_lsp::{completion, definition, find_node, hover, references, symbols, DocumentStore};
 
 fn position(line: u32, character: u32) -> Position {
     Position::new(line, character)
@@ -446,6 +447,207 @@ mod symbol_tests {
 
 // -------------------------------------------------------------- completion
 
+// ------------------------------------------------------------- references
+
+mod reference_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Writes a small project on disk, the way one would really be laid out.
+    fn project(name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let dir = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (path, text) in files {
+            let full = dir.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, text).unwrap();
+        }
+        dir
+    }
+
+    fn uri(dir: &std::path::Path, name: &str) -> String {
+        format!("file://{}", dir.join(name).display())
+    }
+
+    const CARD: &str = "pub fn Card(title: &str) -> Element {\n    <p>{title}</p>\n}";
+
+    /// The case the open-documents-only server could never answer: a file the
+    /// author has not opened still counts as a use.
+    #[test]
+    fn finds_calls_in_files_that_were_never_opened() {
+        let dir = project(
+            "rsx-refs-closed",
+            &[
+                ("card.rsx", CARD),
+                (
+                    "home.rsx",
+                    "pub fn Home() -> Element {\n    <Card title=\"a\" />\n}",
+                ),
+                (
+                    "about.rsx",
+                    "pub fn About() -> Element {\n    <div><Card title=\"b\" /></div>\n}",
+                ),
+            ],
+        );
+        let index = Index::build(&dir);
+        assert_eq!(index.len(), 3);
+
+        let mut store = DocumentStore::new();
+        store.open(&uri(&dir, "card.rsx"), CARD, 1);
+        let document = store.get(&uri(&dir, "card.rsx")).unwrap();
+        // Line 0, on the name `Card` in `pub fn Card`.
+        let found = references::handle(document, position(0, 8), &store, &index, false)
+            .expect("on a declaration");
+
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found[0].uri.ends_with("about.rsx"), "{found:?}");
+        assert!(found[1].uri.ends_with("home.rsx"), "{found:?}");
+    }
+
+    /// The declaration is included only when the client asks for it.
+    #[test]
+    fn the_declaration_is_the_client_s_choice() {
+        let dir = project(
+            "rsx-refs-decl",
+            &[
+                ("card.rsx", CARD),
+                (
+                    "home.rsx",
+                    "pub fn Home() -> Element {\n    <Card title=\"a\" />\n}",
+                ),
+            ],
+        );
+        let index = Index::build(&dir);
+        let mut store = DocumentStore::new();
+        store.open(&uri(&dir, "card.rsx"), CARD, 1);
+        let document = store.get(&uri(&dir, "card.rsx")).unwrap();
+
+        let without = references::handle(document, position(0, 8), &store, &index, false).unwrap();
+        let document = store.get(&uri(&dir, "card.rsx")).unwrap();
+        let with = references::handle(document, position(0, 8), &store, &index, true).unwrap();
+
+        assert_eq!(without.len(), 1);
+        assert_eq!(with.len(), 2);
+        assert!(with.iter().any(|l| l.uri.ends_with("card.rsx")));
+    }
+
+    /// Asking from a call site means the same thing as asking from the
+    /// declaration, and must give the same answer.
+    #[test]
+    fn asking_from_a_call_finds_the_other_calls() {
+        let dir = project(
+            "rsx-refs-fromcall",
+            &[
+                ("card.rsx", CARD),
+                (
+                    "home.rsx",
+                    "pub fn Home() -> Element {\n    <Card title=\"a\" />\n}",
+                ),
+                (
+                    "about.rsx",
+                    "pub fn About() -> Element {\n    <Card title=\"b\" />\n}",
+                ),
+            ],
+        );
+        let index = Index::build(&dir);
+        let mut store = DocumentStore::new();
+        let text = "pub fn Home() -> Element {\n    <Card title=\"a\" />\n}";
+        store.open(&uri(&dir, "home.rsx"), text, 1);
+        let document = store.get(&uri(&dir, "home.rsx")).unwrap();
+
+        // Line 1, on `Card` inside `<Card …>`.
+        let found = references::handle(document, position(1, 6), &store, &index, false).unwrap();
+        assert_eq!(found.len(), 2, "{found:?}");
+    }
+
+    /// An open buffer is newer than the file it came from. The index must not
+    /// also report the saved copy, or every use in an open file is doubled.
+    #[test]
+    fn an_open_buffer_replaces_the_copy_on_disk() {
+        let dir = project(
+            "rsx-refs-overlay",
+            &[
+                ("card.rsx", CARD),
+                (
+                    "home.rsx",
+                    "pub fn Home() -> Element {\n    <Card title=\"a\" />\n}",
+                ),
+            ],
+        );
+        let index = Index::build(&dir);
+        let mut store = DocumentStore::new();
+        store.open(&uri(&dir, "card.rsx"), CARD, 1);
+        // The author has since deleted the call, and has not saved.
+        store.open(
+            &uri(&dir, "home.rsx"),
+            "pub fn Home() -> Element {\n    <p>gone</p>\n}",
+            2,
+        );
+
+        let document = store.get(&uri(&dir, "card.rsx")).unwrap();
+        let found = references::handle(document, position(0, 8), &store, &index, false).unwrap();
+        assert!(found.is_empty(), "the saved copy was counted: {found:?}");
+    }
+
+    /// `<Blog::Card>` is a call to `Card`, and the highlight covers the path
+    /// the author wrote rather than the whole element.
+    #[test]
+    fn a_qualified_call_counts_and_highlights_only_the_name() {
+        let dir = project(
+            "rsx-refs-qualified",
+            &[(
+                "home.rsx",
+                "pub fn Home() -> Element {\n    <Blog::Card title=\"a\">hi</Blog::Card>\n}",
+            )],
+        );
+        let index = Index::build(&dir);
+        let mut store = DocumentStore::new();
+        store.open(&uri(&dir, "card.rsx"), CARD, 1);
+        let document = store.get(&uri(&dir, "card.rsx")).unwrap();
+
+        let found = references::handle(document, position(0, 8), &store, &index, false).unwrap();
+        assert_eq!(found.len(), 1, "{found:?}");
+        let range = found[0].range;
+        assert_eq!(range.start.line, 1);
+        // `    <` is five characters, then the ten of `Blog::Card`.
+        assert_eq!(range.start.character, 5);
+        assert_eq!(range.end.character, 15);
+    }
+
+    /// An element is not a component, and an empty list would claim it has no
+    /// uses rather than that the question does not apply.
+    #[test]
+    fn nothing_is_answered_for_a_plain_element() {
+        let mut store = DocumentStore::new();
+        store.open(
+            "file:///a.rsx",
+            "pub fn A() -> Element {\n    <div>x</div>\n}",
+            1,
+        );
+        let document = store.get("file:///a.rsx").unwrap();
+        assert!(
+            references::handle(document, position(1, 6), &store, &Index::empty(), false).is_none()
+        );
+    }
+
+    /// Build output is not source. Walking it would cost more than the
+    /// project itself on anything that also has a JavaScript toolchain.
+    #[test]
+    fn build_directories_are_not_indexed() {
+        let dir = project(
+            "rsx-refs-skips",
+            &[
+                ("card.rsx", CARD),
+                ("target/generated.rsx", CARD),
+                ("node_modules/pkg/vendored.rsx", CARD),
+                (".git/stashed.rsx", CARD),
+            ],
+        );
+        assert_eq!(Index::build(&dir).len(), 1);
+    }
+}
+
 mod completion_tests {
     use super::*;
 
@@ -702,6 +904,7 @@ mod server_tests {
         assert_eq!(capabilities["hoverProvider"], json!(true));
         assert_eq!(capabilities["definitionProvider"], json!(true));
         assert_eq!(capabilities["documentSymbolProvider"], json!(true));
+        assert_eq!(capabilities["referencesProvider"], json!(true));
         // The trigger characters are a contract with the editor: a client
         // only asks for completions after one of them. Leaving `.` out meant
         // typing `user.` never reached the server, so the whole bridge to
@@ -884,6 +1087,46 @@ mod server_tests {
             "{:?}",
             diagnostics[0]["message"]
         );
+    }
+
+    /// The whole path a client takes: initialize against a project, open one
+    /// file, ask where a component is used. The parts are unit tested above;
+    /// this is the wiring, which is what a capability claim is really about.
+    #[test]
+    fn answers_references_over_the_wire() {
+        let dir = std::env::temp_dir().join("rsx-server-refs");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let card = "pub fn Card(title: &str) -> Element {\n    <p>{title}</p>\n}";
+        std::fs::write(dir.join("card.rsx"), card).unwrap();
+        std::fs::write(
+            dir.join("home.rsx"),
+            "pub fn Home() -> Element {\n    <Card title=\"a\" />\n}",
+        )
+        .unwrap();
+        let root = format!("file://{}", dir.display());
+
+        let replies = exchange(&[
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": { "rootUri": root } }),
+            json!({ "jsonrpc": "2.0", "method": "textDocument/didOpen",
+                    "params": { "textDocument": {
+                        "uri": format!("{root}/card.rsx"), "version": 1, "text": card } } }),
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "textDocument/references",
+                    "params": {
+                        "textDocument": { "uri": format!("{root}/card.rsx") },
+                        "position": { "line": 0, "character": 8 },
+                        "context": { "includeDeclaration": false } } }),
+        ]);
+
+        let references = replies
+            .iter()
+            .find(|m| m["id"] == json!(2))
+            .expect("no reply to the references request");
+        let locations = references["result"].as_array().expect("not a list");
+        assert_eq!(locations.len(), 1, "{locations:?}");
+        assert!(locations[0]["uri"].as_str().unwrap().ends_with("home.rsx"));
+        assert_eq!(locations[0]["range"]["start"]["line"], json!(1));
     }
 
     #[test]
