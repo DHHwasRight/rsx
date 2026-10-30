@@ -1,6 +1,18 @@
-# rsx
+<p align="center">
+  <img src="https://raw.githubusercontent.com/DHHwasRight/.github/main/profile/logo.png" width="96" alt="">
+</p>
 
-Compile-time HTML templates for Rust. A `.rsx` file is Rust — `use`
+<h1 align="center">rsx</h1>
+
+<p align="center">Compile-time HTML templates for Rust.</p>
+
+> **Status:** The DHHwasRight org is named after RailsConf 2026. It is an
+> attempt to implement DHH's claims (HTML over the wire, no build step, one
+> database) in Rust, to see how far that gets. This project is mostly vibe
+> coded: an LLM wrote most of it. It is a thought exercise. We use it for
+> internal products where mission criticality is not needed.
+
+A `.rsx` file is Rust — `use`
 declarations, items, functions — except that a function returning `Element`
 has a markup body. Templates are compiled into the binary when the crate is
 built; nothing is read from disk at runtime, and nothing is interpreted.
@@ -541,3 +553,17 @@ a dot. This reaches the same place by a different route: rather than build a
 second type checker, it maps the cursor into the generated Rust and asks
 `rust-analyzer`, which already knows the answer and keeps knowing it as Rust
 changes.
+
+## Part of DHHwasRight
+
+- [brocanth](https://github.com/DHHwasRight/brocanth): Rust framework for HTML-first apps and API services. Postgres-first, day-2 ready. Depends on rsx.
+- [jt](https://github.com/DHHwasRight/jt): Compile-time JSON templates for Rust.
+- [zod](https://github.com/DHHwasRight/zod): Schemas that a literal must satisfy at compile time and input must satisfy at run time.
+- [strata](https://github.com/DHHwasRight/strata): Layered async caching that reads like memoization.
+- [depoth](https://github.com/DHHwasRight/depoth): A static content framework in Rust. Templates compile; content does not. Depends on rsx.
+- [prerender](https://github.com/DHHwasRight/prerender): A static site generator for prerendered partial navigation. Its templates are `.rsx` files.
+- [htmx](https://github.com/DHHwasRight/htmx): dp-swap: partial page updates for prerendered sites. An htmx rewrite in TypeScript.
+
+## License
+
+MIT, as `Cargo.toml` states. The repo has no LICENSE file yet.
