@@ -117,6 +117,7 @@ impl Server {
                     "definitionProvider": true,
                     "documentSymbolProvider": true,
                     "referencesProvider": true,
+                    "workspaceSymbolProvider": true,
                     "completionProvider": {
                         // `.` matters most: without it an editor never
                         // asks after `user.`, which is exactly where the
@@ -254,6 +255,15 @@ impl Server {
                     include_declaration,
                 );
                 Outcome::Reply(to_value(result))
+            }
+
+            "workspace/symbol" => {
+                let query = params
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let result = symbols::workspace(query, &self.store, &self.index);
+                Outcome::Reply(to_value(Some(result)))
             }
 
             // A save is the moment the file on disk and the file on screen

@@ -648,6 +648,55 @@ mod reference_tests {
     }
 }
 
+// -------------------------------------------------------- workspace symbols
+
+mod workspace_symbol_tests {
+    use super::*;
+
+    fn store_with(files: &[(&str, &str)]) -> DocumentStore {
+        let mut store = DocumentStore::new();
+        for (uri, text) in files {
+            store.open(uri, text, 1);
+        }
+        store
+    }
+
+    #[test]
+    fn matches_a_substring_in_any_case() {
+        let store = store_with(&[
+            (
+                "file:///a.rsx",
+                "pub fn AdminUserCard() -> Element { <p>a</p> }",
+            ),
+            ("file:///b.rsx", "pub fn Footer() -> Element { <p>b</p> }"),
+        ]);
+        let found = symbols::workspace("card", &store, &Index::empty());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "AdminUserCard");
+        // The file is what a picker shows beside the name.
+        assert_eq!(found[0].container_name.as_deref(), Some("a.rsx"));
+    }
+
+    #[test]
+    fn an_empty_query_lists_everything_in_name_order() {
+        let store = store_with(&[
+            ("file:///a.rsx", "pub fn Zebra() -> Element { <p>a</p> }"),
+            ("file:///b.rsx", "pub fn Apple() -> Element { <p>b</p> }"),
+        ]);
+        let found = symbols::workspace("", &store, &Index::empty());
+        let names: Vec<&str> = found.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Apple", "Zebra"]);
+    }
+
+    #[test]
+    fn the_range_points_at_the_name_and_not_the_body() {
+        let store = store_with(&[("file:///a.rsx", "pub fn Card() -> Element { <p>a</p> }")]);
+        let found = symbols::workspace("Card", &store, &Index::empty());
+        assert_eq!(found[0].location.range.start.character, 7);
+        assert_eq!(found[0].location.range.end.character, 11);
+    }
+}
+
 mod completion_tests {
     use super::*;
 
@@ -905,6 +954,7 @@ mod server_tests {
         assert_eq!(capabilities["definitionProvider"], json!(true));
         assert_eq!(capabilities["documentSymbolProvider"], json!(true));
         assert_eq!(capabilities["referencesProvider"], json!(true));
+        assert_eq!(capabilities["workspaceSymbolProvider"], json!(true));
         // The trigger characters are a contract with the editor: a client
         // only asks for completions after one of them. Leaving `.` out meant
         // typing `user.` never reached the server, so the whole bridge to
@@ -1093,7 +1143,7 @@ mod server_tests {
     /// file, ask where a component is used. The parts are unit tested above;
     /// this is the wiring, which is what a capability claim is really about.
     #[test]
-    fn answers_references_over_the_wire() {
+    fn answers_references_and_workspace_symbols_over_the_wire() {
         let dir = std::env::temp_dir().join("rsx-server-refs");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1117,6 +1167,8 @@ mod server_tests {
                         "textDocument": { "uri": format!("{root}/card.rsx") },
                         "position": { "line": 0, "character": 8 },
                         "context": { "includeDeclaration": false } } }),
+            json!({ "jsonrpc": "2.0", "id": 3, "method": "workspace/symbol",
+                    "params": { "query": "car" } }),
         ]);
 
         let references = replies
@@ -1127,6 +1179,35 @@ mod server_tests {
         assert_eq!(locations.len(), 1, "{locations:?}");
         assert!(locations[0]["uri"].as_str().unwrap().ends_with("home.rsx"));
         assert_eq!(locations[0]["range"]["start"]["line"], json!(1));
+
+        let symbols = replies
+            .iter()
+            .find(|m| m["id"] == json!(3))
+            .expect("no reply to the symbol request");
+        let found = symbols["result"].as_array().expect("not a list");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0]["name"], json!("Card"));
+        // 12 is `Function` in the protocol, not the string "Function".
+        assert_eq!(found[0]["kind"], json!(12));
+        assert_eq!(found[0]["containerName"], json!("card.rsx"));
+    }
+
+    /// A client that sends no root still works; it just sees only what is
+    /// open. Answering nothing at all there would be a worse failure than
+    /// answering less.
+    #[test]
+    fn a_client_without_a_project_root_still_searches_open_files() {
+        let replies = exchange(&[
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
+            json!({ "jsonrpc": "2.0", "method": "textDocument/didOpen",
+                    "params": { "textDocument": { "uri": "file:///only.rsx", "version": 1,
+                        "text": "pub fn Card() -> Element { <p>a</p> }" } } }),
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "workspace/symbol",
+                    "params": { "query": "Card" } }),
+        ]);
+
+        let symbols = replies.iter().find(|m| m["id"] == json!(2)).unwrap();
+        assert_eq!(symbols["result"].as_array().unwrap().len(), 1);
     }
 
     #[test]

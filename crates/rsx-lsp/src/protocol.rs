@@ -182,6 +182,21 @@ pub struct DocumentSymbol {
     pub children: Vec<DocumentSymbol>,
 }
 
+/// A symbol in the flat list `workspace/symbol` answers with.
+///
+/// The protocol has a newer `WorkspaceSymbol` that may leave the range out and
+/// resolve it later. Nothing here is expensive enough to defer, so this server
+/// sends the older shape, which every client still understands.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolInformation {
+    pub name: String,
+    pub kind: SymbolKind,
+    pub location: Location,
+    /// The file the symbol is in, shown beside the name in a picker.
+    #[serde(rename = "containerName", skip_serializing_if = "Option::is_none")]
+    pub container_name: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
