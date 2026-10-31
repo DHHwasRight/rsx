@@ -31,7 +31,12 @@
       {
         "language": "rsx",
         "scopeName": "source.rsx",
-        "path": "./syntaxes/rsx.tmLanguage.json"
+        "path": "./syntaxes/rsx.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.expression.rust": "rust",
+          "meta.embedded.block.css": "css",
+          "meta.embedded.block.javascript": "javascript"
+        }
       }
     ],
     "configuration": {
@@ -67,13 +72,17 @@
     "@types/vscode": "^1.75.0",
     "@vscode/test-electron": "^3.1.0",
     "glob": "^13.0.6",
-    "mocha": "^12.0.3"
+    "mocha": "^12.0.3",
+    "tm-grammars": "^1.32.22",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
   },
   "scripts": {
-    "test": "node ./test/package.test.js && node ./test/runTest.js",
+    "test": "node ./test/package.test.js && node ./test/grammar.test.js && node ./test/runTest.js",
     "test:package": "node ./test/package.test.js",
     "test:editor": "node ./test/runTest.js",
-    "package": "node ./scripts/build-package.js"
+    "package": "node ./scripts/build-package.js",
+    "test:grammar": "node ./test/grammar.test.js"
   },
   "capabilities": {
     "untrustedWorkspaces": {

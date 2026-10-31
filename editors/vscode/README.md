@@ -69,3 +69,15 @@ npm test
 ```
 
 This launches a real VS Code and drives the extension through the editor API.
+
+## Grammar
+
+The TextMate grammar is `crates/rsx/grammar/rsx.tmLanguage.json`; `syntaxes/rsx.tmLanguage.json`
+is a copy, and `cargo test -p rsx --test grammar` fails when they differ. The crate exposes it as
+`rsx::grammar::TEXTMATE`, so other tools (a documentation site, a highlighter such as giallo) color
+rsx the way the editor does.
+
+It builds on the Rust, CSS, and JavaScript grammars VS Code ships: component bodies are markup,
+the bodies of `if` / `else` / `for` / `while` / `match` arms are markup, and everything else is
+Rust. `npm run test:grammar` runs it with vscode-textmate against a sample and every `.rsx` file in
+the repository.

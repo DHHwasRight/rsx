@@ -1,26 +1,71 @@
 {
   "comments": {
     "lineComment": "//",
-    "blockComment": ["/*", "*/"]
+    "blockComment": [
+      "/*",
+      "*/"
+    ]
   },
   "brackets": [
-    ["{", "}"],
-    ["[", "]"],
-    ["(", ")"],
-    ["<", ">"]
+    [
+      "{",
+      "}"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "(",
+      ")"
+    ],
+    [
+      "<",
+      ">"
+    ]
   ],
   "autoClosingPairs": [
-    { "open": "{", "close": "}" },
-    { "open": "[", "close": "]" },
-    { "open": "(", "close": ")" },
-    { "open": "\"", "close": "\"", "notIn": ["string"] }
+    {
+      "open": "{",
+      "close": "}"
+    },
+    {
+      "open": "[",
+      "close": "]"
+    },
+    {
+      "open": "(",
+      "close": ")"
+    },
+    {
+      "open": "\"",
+      "close": "\"",
+      "notIn": [
+        "string"
+      ]
+    }
   ],
   "surroundingPairs": [
-    ["{", "}"],
-    ["[", "]"],
-    ["(", ")"],
-    ["<", ">"],
-    ["\"", "\""]
+    [
+      "{",
+      "}"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "(",
+      ")"
+    ],
+    [
+      "<",
+      ">"
+    ],
+    [
+      "\"",
+      "\""
+    ]
   ],
   "indentationRules": {
     "increaseIndentPattern": "(\\{[^}\"']*$)|(<(?!area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)([A-Za-z][\\w:.-]*)(\\s[^>]*)?>(?!.*</\\2>)\\s*$)",
@@ -31,5 +76,19 @@
       "start": "^\\s*//\\s*#?region\\b",
       "end": "^\\s*//\\s*#?endregion\\b"
     }
-  }
+  },
+  "colorizedBracketPairs": [
+    [
+      "{",
+      "}"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "(",
+      ")"
+    ]
+  ]
 }

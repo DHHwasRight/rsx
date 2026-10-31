@@ -31,6 +31,7 @@
 
 mod error;
 mod escape;
+pub mod grammar;
 mod template;
 mod writer;
 
